@@ -70,7 +70,8 @@ static struct maildir_flag_tag flag2tag[] = {
     { 'F', "flagged", FALSE},
     { 'P', "passed",  FALSE},
     { 'R', "replied", FALSE},
-    { 'S', "unread",  TRUE }
+    { 'S', "unread",  TRUE },
+    { 'T', "trashed", FALSE}
 };
 
 /* We end up having to call the destructor explicitly because we had
