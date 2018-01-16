@@ -7,7 +7,7 @@
 
 struct _tag_operation_t {
     const char *tag;
-    notmuch_bool_t remove;
+    bool remove;
 };
 
 struct _tag_op_list_t {
@@ -28,13 +28,15 @@ line_error (tag_parse_status_t status,
     fprintf (stderr, status < 0 ? "Error: " : "Warning: ");
     vfprintf (stderr, format, va_args);
     fprintf (stderr, " [%s]\n", line);
+
+    va_end (va_args);
+
     return status;
 }
 
 const char *
-illegal_tag (const char *tag, notmuch_bool_t remove)
+illegal_tag (const char *tag, bool remove)
 {
-
     if (*tag == '\0' && ! remove)
 	return "empty tag forbidden";
 
@@ -82,7 +84,7 @@ parse_tag_line (void *ctx, char *line,
 
     /* Parse tags. */
     while ((tok = strtok_len (tok + tok_len, " ", &tok_len)) != NULL) {
-	notmuch_bool_t remove;
+	bool remove;
 	char *tag;
 
 	/* Optional explicit end of tags marker. */
@@ -155,7 +157,6 @@ tag_parse_status_t
 parse_tag_command_line (void *ctx, int argc, char **argv,
 			char **query_str, tag_op_list_t *tag_ops)
 {
-
     int i;
 
     for (i = 0; i < argc; i++) {
@@ -167,7 +168,7 @@ parse_tag_command_line (void *ctx, int argc, char **argv,
 	if (argv[i][0] != '+' && argv[i][0] != '-')
 	    break;
 
-	notmuch_bool_t is_remove = argv[i][0] == '-';
+	bool is_remove = argv[i][0] == '-';
 	const char *msg;
 
 	msg = illegal_tag (argv[i] + 1, is_remove);
@@ -202,6 +203,8 @@ message_error (notmuch_message_t *message,
     vfprintf (stderr, format, va_args);
     fprintf (stderr, "Message-ID: %s\n", notmuch_message_get_message_id (message));
     fprintf (stderr, "Status: %s\n", notmuch_status_to_string (status));
+
+    va_end (va_args);
 }
 
 static int
@@ -209,14 +212,12 @@ makes_changes (notmuch_message_t *message,
 	       tag_op_list_t *list,
 	       tag_op_flag_t flags)
 {
-
     size_t i;
 
     notmuch_tags_t *tags;
-    notmuch_bool_t changes = FALSE;
+    bool changes = false;
 
     /* First, do we delete an existing tag? */
-    changes = FALSE;
     for (tags = notmuch_message_get_tags (message);
 	 ! changes && notmuch_tags_valid (tags);
 	 notmuch_tags_move_to_next (tags)) {
@@ -238,11 +239,11 @@ makes_changes (notmuch_message_t *message,
     notmuch_tags_destroy (tags);
 
     if (changes)
-	return TRUE;
+	return true;
 
     /* Now check for adding new tags */
     for (i = 0; i < list->count; i++) {
-	notmuch_bool_t exists = FALSE;
+	bool exists = false;
 
 	if (list->ops[i].remove)
 	    continue;
@@ -252,7 +253,7 @@ makes_changes (notmuch_message_t *message,
 	     notmuch_tags_move_to_next (tags)) {
 	    const char *cur_tag = notmuch_tags_get (tags);
 	    if (strcmp (cur_tag, list->ops[i].tag) == 0) {
-		exists = TRUE;
+		exists = true;
 		break;
 	    }
 	}
@@ -263,9 +264,9 @@ makes_changes (notmuch_message_t *message,
 	 * but this is OK from a correctness point of view
 	 */
 	if (! exists)
-	    return TRUE;
+	    return true;
     }
-    return FALSE;
+    return false;
 
 }
 
@@ -358,7 +359,7 @@ tag_op_list_create (void *ctx)
 int
 tag_op_list_append (tag_op_list_t *list,
 		    const char *tag,
-		    notmuch_bool_t remove)
+		    bool remove)
 {
     /* Make room if current array is full.  This should be a fairly
      * rare case, considering the initial array size.
@@ -386,7 +387,7 @@ tag_op_list_append (tag_op_list_t *list,
  *   Is the i'th tag operation a remove?
  */
 
-notmuch_bool_t
+bool
 tag_op_list_isremove (const tag_op_list_t *list, size_t i)
 {
     assert (i < list->count);

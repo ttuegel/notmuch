@@ -176,12 +176,12 @@ mutiple parts get a header."
   (unless (bolp) (insert "\n")))
 
 (defun notmuch-mua-reply (query-string &optional sender reply-all)
-  (let ((args '("reply" "--format=sexp" "--format-version=1"))
+  (let ((args '("reply" "--format=sexp" "--format-version=4"))
 	(process-crypto notmuch-show-process-crypto)
 	reply
 	original)
     (when process-crypto
-      (setq args (append args '("--decrypt"))))
+      (setq args (append args '("--decrypt=true"))))
 
     (if reply-all
 	(setq args (append args '("--reply-to=all")))
@@ -218,7 +218,7 @@ mutiple parts get a header."
 		     else
 		     collect pair)))
 	  (notmuch-mua-mail (plist-get reply-headers :To)
-			    (plist-get reply-headers :Subject)
+			    (notmuch-sanitize (plist-get reply-headers :Subject))
 			    (notmuch-headers-plist-to-alist reply-headers)
 			    nil (notmuch-mua-get-switch-function))))
 

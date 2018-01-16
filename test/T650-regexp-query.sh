@@ -1,15 +1,81 @@
 #!/usr/bin/env bash
 test_description='regular expression searches'
-. ./test-lib.sh || exit 1
-
-add_email_corpus
-
+. $(dirname "$0")/test-lib.sh || exit 1
 
 if [ $NOTMUCH_HAVE_XAPIAN_FIELD_PROCESSOR -eq 0 ]; then
     test_done
 fi
 
+add_message '[dir]=bad' '[subject]="To the bone"'
+add_message '[dir]=.' '[subject]="Top level"'
+add_message '[dir]=bad/news' '[subject]="Bears"'
+mkdir -p "${MAIL_DIR}/duplicate/bad/news"
+cp "$gen_msg_filename" "${MAIL_DIR}/duplicate/bad/news"
+
+add_message '[dir]=things' '[subject]="These are a few"'
+add_message '[dir]=things/favorite' '[subject]="Raindrops, whiskers, kettles"'
+add_message '[dir]=things/bad' '[subject]="Bites, stings, sad feelings"'
+
+test_begin_subtest "empty path:// search"
+notmuch search 'path:""' > EXPECTED
+notmuch search 'path:/^$/' > OUTPUT
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "empty folder:// search"
+notmuch search 'folder:""' > EXPECTED
+notmuch search 'folder:/^$/' > OUTPUT
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "unanchored folder:// specification"
+output=$(notmuch search folder:/bad/ | notmuch_search_sanitize)
+test_expect_equal "$output" "thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; To the bone (inbox unread)
+thread:XXX   2001-01-05 [1/1(2)] Notmuch Test Suite; Bears (inbox unread)
+thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; Bites, stings, sad feelings (inbox unread)"
+
+test_begin_subtest "anchored folder:// search"
+output=$(notmuch search 'folder:/^bad$/' | notmuch_search_sanitize)
+test_expect_equal "$output" "thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; To the bone (inbox unread)"
+
+test_begin_subtest "unanchored path:// specification"
+output=$(notmuch search path:/bad/ | notmuch_search_sanitize)
+test_expect_equal "$output" "thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; To the bone (inbox unread)
+thread:XXX   2001-01-05 [1/1(2)] Notmuch Test Suite; Bears (inbox unread)
+thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; Bites, stings, sad feelings (inbox unread)"
+
+test_begin_subtest "anchored path:// search"
+output=$(notmuch search 'path:/^bad$/' | notmuch_search_sanitize)
+test_expect_equal "$output" "thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; To the bone (inbox unread)"
+
+# Use "standard" corpus from here on.
+rm -rf $MAIL_DIR
+add_email_corpus
+
 notmuch search --output=messages from:cworth > cworth.msg-ids
+
+# these headers will generate no document terms
+add_message '[from]="-" [subject]="empty from"'
+add_message '[subject]="-"'
+
+test_begin_subtest "null from: search"
+notmuch search 'from:""' | notmuch_search_sanitize > OUTPUT
+cat <<EOF > EXPECTED
+thread:XXX   2001-01-05 [1/1] -; empty from (inbox unread)
+EOF
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "null subject: search"
+notmuch search 'subject:""' | notmuch_search_sanitize > OUTPUT
+cat <<EOF > EXPECTED
+thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; - (inbox unread)
+EOF
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "xapian wildcard search for from:"
+notmuch search --output=messages 'from:cwo*' > OUTPUT
+test_expect_equal_file cworth.msg-ids OUTPUT
+
+test_begin_subtest "xapian wildcard search for subject:"
+test_expect_equal $(notmuch count 'subject:count*') 1
 
 test_begin_subtest "regexp from search, case sensitive"
 notmuch search --output=messages from:/carl/ > OUTPUT
@@ -77,6 +143,33 @@ notmuch search: A Xapian exception occurred
 A Xapian exception occurred parsing query: Invalid regular expression
 Query string was: from:/unbalanced[/
 EOF
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "empty mid search"
+notmuch search --output=messages mid:yoom > OUTPUT
+cp /dev/null EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "non-empty mid regex search"
+notmuch search --output=messages mid:/yoom/ > OUTPUT
+test_expect_equal_file cworth.msg-ids OUTPUT
+
+test_begin_subtest "combine regexp mid and subject"
+notmuch search  subject:/-C/ and mid:/y..m/ | notmuch_search_sanitize > OUTPUT
+cat <<EOF > EXPECTED
+thread:XXX   2009-11-18 [1/2] Carl Worth| Jan Janak; [notmuch] [PATCH] Older versions of install do not support -C. (inbox unread)
+EOF
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "unanchored tag search"
+notmuch search tag:signed or tag:inbox > EXPECTED
+notmuch search tag:/i/ > OUTPUT
+test_expect_equal_file EXPECTED OUTPUT
+
+notmuch tag +testsi '*'
+test_begin_subtest "anchored tag search"
+notmuch search tag:signed > EXPECTED
+notmuch search tag:/^si/ > OUTPUT
 test_expect_equal_file EXPECTED OUTPUT
 
 test_done

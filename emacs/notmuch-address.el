@@ -159,7 +159,7 @@ matching `notmuch-address-completion-headers-regexp'.
 		       #'notmuch-address-expand-name)))
       (when setup-company
 	(notmuch-company-setup))
-      (unless (memq pair message-completion-alist)
+      (unless (member pair message-completion-alist)
 	(setq message-completion-alist
 	      (push pair message-completion-alist)))))
 
@@ -317,7 +317,7 @@ execution, CALLBACK is called when harvesting finishes."
 			    (when config-query
 			      (format " and (%s)" config-query)))
 		  from-or-to-me-query))
-	 (args `("address" "--format=sexp" "--format-version=2"
+	 (args `("address" "--format=sexp" "--format-version=4"
 		 ,(if sent "--output=recipients" "--output=sender")
 		 "--deduplicate=address"
 		 ,query)))

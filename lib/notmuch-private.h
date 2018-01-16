@@ -24,6 +24,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE /* For getline and asprintf */
 #endif
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "compat.h"
@@ -46,13 +47,12 @@ NOTMUCH_BEGIN_DECLS
 
 #include <talloc.h>
 
-#include <gmime/gmime.h>
+#include "gmime-extra.h"
 
 #include "xutil.h"
 #include "error_util.h"
 #include "string-util.h"
-
-#pragma GCC visibility push(hidden)
+#include "crypto.h"
 
 #ifdef DEBUG
 # define DEBUG_DATABASE_SANITY 1
@@ -75,12 +75,6 @@ NOTMUCH_BEGIN_DECLS
     (_NOTMUCH_VALID_BIT(bit) ? (*(valp) &= ~(1ull << (bit))) : *(valp))
 
 #define unused(x) x __attribute__ ((unused))
-
-#ifdef __cplusplus
-# define visible __attribute__((visibility("default")))
-#else
-# define visible
-#endif
 
 /* Thanks to Andrew Tridgell's (SAMBA's) talloc for this definition of
  * unlikely. The talloc source code comes to us via the GNU LGPL v. 3.
@@ -290,7 +284,7 @@ notmuch_private_status_t
 _notmuch_message_has_term (notmuch_message_t *message,
 			   const char *prefix_name,
 			   const char *value,
-			   notmuch_bool_t *result);
+			   bool *result);
 
 notmuch_private_status_t
 _notmuch_message_gen_terms (notmuch_message_t *message,
@@ -433,10 +427,28 @@ const char *
 _notmuch_message_file_get_header (notmuch_message_file_t *message,
 				 const char *header);
 
+notmuch_status_t
+_notmuch_message_file_get_headers (notmuch_message_file_t *message_file,
+				   const char **from_out,
+				   const char **subject_out,
+				   const char **to_out,
+				   const char **date_out,
+				   char **message_id_out);
+
+const char *
+_notmuch_message_file_get_filename (notmuch_message_file_t *message);
+
+/* add-message.cc */
+notmuch_status_t
+_notmuch_database_link_message_to_parents (notmuch_database_t *notmuch,
+					   notmuch_message_t *message,
+					   notmuch_message_file_t *message_file,
+					   const char **thread_id);
 /* index.cc */
 
 notmuch_status_t
 _notmuch_message_index_file (notmuch_message_t *message,
+			     notmuch_indexopts_t *indexopts,
 			     notmuch_message_file_t *message_file);
 
 /* messages.c */
@@ -455,8 +467,8 @@ typedef struct _notmuch_message_list {
  * somewhere with some nasty C++ objects in it. We'll try to maintain
  * ignorance of that here. (See notmuch_mset_messages_t in query.cc)
  */
-struct visible _notmuch_messages {
-    notmuch_bool_t is_of_list_type;
+struct _notmuch_messages {
+    bool is_of_list_type;
     notmuch_doc_id_set_t *excluded_doc_ids;
     notmuch_message_node_t *iterator;
 };
@@ -473,7 +485,7 @@ _notmuch_messages_create (notmuch_message_list_t *list);
 
 /* query.cc */
 
-notmuch_bool_t
+bool
 _notmuch_mset_messages_valid (notmuch_messages_t *messages);
 
 notmuch_message_t *
@@ -482,7 +494,7 @@ _notmuch_mset_messages_get (notmuch_messages_t *messages);
 void
 _notmuch_mset_messages_move_to_next (notmuch_messages_t *messages);
 
-notmuch_bool_t
+bool
 _notmuch_doc_id_set_contains (notmuch_doc_id_set_t *doc_ids,
 			      unsigned int doc_id);
 
@@ -500,6 +512,20 @@ notmuch_status_t
 _notmuch_query_count_documents (notmuch_query_t *query,
 				const char *type,
 				unsigned *count_out);
+/* message-id.c */
+
+/* Parse an RFC 822 message-id, discarding whitespace, any RFC 822
+ * comments, and the '<' and '>' delimiters.
+ *
+ * If not NULL, then *next will be made to point to the first character
+ * not parsed, (possibly pointing to the final '\0' terminator.
+ *
+ * Returns a newly talloc'ed string belonging to 'ctx'.
+ *
+ * Returns NULL if there is any error parsing the message-id. */
+char *
+_notmuch_message_id_parse (void *ctx, const char *message_id, const char **next);
+
 
 /* message.cc */
 
@@ -509,6 +535,8 @@ _notmuch_message_add_reply (notmuch_message_t *message,
 notmuch_database_t *
 _notmuch_message_database (notmuch_message_t *message);
 
+void
+_notmuch_message_remove_unprefixed_terms (notmuch_message_t *message);
 /* sha1.c */
 
 char *
@@ -524,7 +552,7 @@ typedef struct _notmuch_string_node {
     struct _notmuch_string_node *next;
 } notmuch_string_node_t;
 
-typedef struct visible _notmuch_string_list {
+typedef struct _notmuch_string_list {
     int length;
     notmuch_string_node_t *head;
     notmuch_string_node_t **tail;
@@ -532,6 +560,12 @@ typedef struct visible _notmuch_string_list {
 
 notmuch_string_list_t *
 _notmuch_string_list_create (const void *ctx);
+
+/*
+ * return the number of strings in 'list'
+ */
+int
+_notmuch_string_list_length (notmuch_string_list_t *list);
 
 /* Add 'string' to 'list'.
  *
@@ -560,9 +594,9 @@ _notmuch_string_map_get (notmuch_string_map_t *map, const char *key);
 
 notmuch_string_map_iterator_t *
 _notmuch_string_map_iterator_create (notmuch_string_map_t *map, const char *key,
-				     notmuch_bool_t exact);
+				     bool exact);
 
-notmuch_bool_t
+bool
 _notmuch_string_map_iterator_valid (notmuch_string_map_iterator_t *iter);
 
 void
@@ -601,6 +635,12 @@ _notmuch_thread_create (void *ctx,
 			notmuch_exclude_t omit_exclude,
 			notmuch_sort_t sort);
 
+/* indexopts.c */
+
+struct _notmuch_indexopts {
+    _notmuch_crypto_t crypto;
+};
+
 NOTMUCH_END_DECLS
 
 #ifdef __cplusplus
@@ -620,7 +660,5 @@ _notmuch_talloc_steal (const void *new_ctx, const T *ptr)
 #define talloc_steal _notmuch_talloc_steal
 #endif
 #endif
-
-#pragma GCC visibility pop
 
 #endif

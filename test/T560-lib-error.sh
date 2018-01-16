@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 test_description="error reporting for library"
 
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
 add_email_corpus
 
@@ -127,7 +127,7 @@ int main (int argc, char** argv)
    if (stat != NOTMUCH_STATUS_SUCCESS) {
      fprintf (stderr, "error opening database: %d\n", stat);
    }
-   stat = notmuch_database_add_message (db, "/dev/null", NULL);
+   stat = notmuch_database_index_file (db, "/dev/null", NULL, NULL);
    if (stat)
        fputs (notmuch_database_status_string (db), stderr);
 
@@ -152,7 +152,7 @@ int main (int argc, char** argv)
    if (stat != NOTMUCH_STATUS_SUCCESS) {
      fprintf (stderr, "error opening database: %d\n", stat);
    }
-   stat = notmuch_database_add_message (db, "./nonexistent", NULL);
+   stat = notmuch_database_index_file (db, "./nonexistent", NULL, NULL);
    if (stat) {
        char *status_string = notmuch_database_status_string (db);
        if (status_string) fputs (status_string, stderr);
@@ -286,7 +286,7 @@ cat c_head - c_tail <<'EOF' | test_C ${MAIL_DIR}
    {
        notmuch_messages_t *messages = NULL;
        notmuch_query_t *query=notmuch_query_create (db, "*");
-       stat = notmuch_query_search_messages_st (query, &messages);
+       stat = notmuch_query_search_messages (query, &messages);
    }
 EOF
 sed 's/^\(A Xapian exception [^:]*\):.*$/\1/' < OUTPUT > OUTPUT.clean
@@ -303,9 +303,9 @@ backup_database
 test_begin_subtest "Xapian exception counting messages"
 cat c_head - c_tail <<'EOF' | test_C ${MAIL_DIR}
    {
+       int count;
        notmuch_query_t *query=notmuch_query_create (db, "id:87ocn0qh6d.fsf@yoom.home.cworth.org");
-       int count = notmuch_query_count_messages (query);
-       stat = (count == 0);
+       stat = notmuch_query_count_messages (query, &count);
    }
 EOF
 sed 's/^\(A Xapian exception [^:]*\):.*$/\1/' < OUTPUT > OUTPUT.clean

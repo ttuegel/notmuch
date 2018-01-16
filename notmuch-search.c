@@ -34,6 +34,7 @@ typedef enum {
     OUTPUT_SENDER	= 1 << 5,
     OUTPUT_RECIPIENTS	= 1 << 6,
     OUTPUT_COUNT	= 1 << 7,
+    OUTPUT_ADDRESS	= 1 << 8,
 } output_t;
 
 typedef enum {
@@ -51,17 +52,17 @@ typedef enum {
 
 typedef struct {
     notmuch_database_t *notmuch;
-    format_sel_t format_sel;
+    int format_sel;
     sprinter_t *format;
-    notmuch_exclude_t exclude;
+    int exclude;
     notmuch_query_t *query;
-    notmuch_sort_t sort;
-    output_t output;
+    int sort;
+    int output;
     int offset;
     int limit;
     int dupe;
     GHashTable *addresses;
-    dedup_t dedup;
+    int dedup;
 } search_context_t;
 
 typedef struct {
@@ -123,7 +124,7 @@ do_search_threads (search_context_t *ctx)
     if (ctx->offset < 0) {
 	unsigned count;
 	notmuch_status_t status;
-	status = notmuch_query_count_threads_st (ctx->query, &count);
+	status = notmuch_query_count_threads (ctx->query, &count);
 	if (print_status_query ("notmuch search", ctx->query, status))
 	    return 1;
 
@@ -132,7 +133,7 @@ do_search_threads (search_context_t *ctx)
 	    ctx->offset = 0;
     }
 
-    status = notmuch_query_search_threads_st (ctx->query, &threads);
+    status = notmuch_query_search_threads (ctx->query, &threads);
     if (print_status_query("notmuch search", ctx->query, status))
 	return 1;
 
@@ -160,9 +161,10 @@ do_search_threads (search_context_t *ctx)
 	    const char *subject = notmuch_thread_get_subject (thread);
 	    const char *thread_id = notmuch_thread_get_thread_id (thread);
 	    int matched = notmuch_thread_get_matched_messages (thread);
+	    int files = notmuch_thread_get_total_files (thread);
 	    int total = notmuch_thread_get_total_messages (thread);
 	    const char *relative_date = NULL;
-	    notmuch_bool_t first_tag = TRUE;
+	    bool first_tag = true;
 
 	    format->begin_map (format);
 
@@ -175,13 +177,23 @@ do_search_threads (search_context_t *ctx)
 
 	    if (format->is_text_printer) {
                 /* Special case for the text formatter */
-		printf ("thread:%s %12s [%d/%d] %s; %s (",
+		printf ("thread:%s %12s ",
 			thread_id,
-			relative_date,
+			relative_date);
+		if (total == files)
+		    printf ("[%d/%d] %s; %s (",
 			matched,
 			total,
 			sanitize_string (ctx_quote, authors),
 			sanitize_string (ctx_quote, subject));
+		else
+		    printf ("[%d/%d(%d)] %s; %s (",
+			matched,
+			total,
+			files,
+			sanitize_string (ctx_quote, authors),
+			sanitize_string (ctx_quote, subject));
+
 	    } else { /* Structured Output */
 		format->map_key (format, "thread");
 		format->string (format, thread_id);
@@ -232,7 +244,7 @@ do_search_threads (search_context_t *ctx)
 		if (format->is_text_printer) {
                   /* Special case for the text formatter */
 		    if (first_tag)
-			first_tag = FALSE;
+			first_tag = false;
 		    else
 			fputc (' ', stdout);
 		    fputs (tag, stdout);
@@ -284,9 +296,9 @@ static int mailbox_compare (const void *v1, const void *v2)
     return ret;
 }
 
-/* Returns TRUE iff name and addr is duplicate. If not, stores the
+/* Returns true iff name and addr is duplicate. If not, stores the
  * name/addr pair in order to detect subsequent duplicates. */
-static notmuch_bool_t
+static bool
 is_duplicate (const search_context_t *ctx, const char *name, const char *addr)
 {
     char *key;
@@ -304,12 +316,12 @@ is_duplicate (const search_context_t *ctx, const char *name, const char *addr)
 	if (l) {
 	    mailbox = l->data;
 	    mailbox->count++;
-	    return TRUE;
+	    return true;
 	}
 
 	mailbox = new_mailbox (ctx->format, name, addr);
 	if (! mailbox)
-	    return FALSE;
+	    return false;
 
 	/*
 	 * XXX: It would be more efficient to prepend to the list, but
@@ -320,24 +332,24 @@ is_duplicate (const search_context_t *ctx, const char *name, const char *addr)
 	if (list != g_list_append (list, mailbox))
 	    INTERNAL_ERROR ("appending to list changed list head\n");
 
-	return FALSE;
+	return false;
     }
 
     key = talloc_strdup (ctx->format, addr);
     if (! key)
-	return FALSE;
+	return false;
 
     mailbox = new_mailbox (ctx->format, name, addr);
     if (! mailbox)
-	return FALSE;
+	return false;
 
     list = g_list_append (NULL, mailbox);
     if (! list)
-	return FALSE;
+	return false;
 
     g_hash_table_insert (ctx->addresses, key, list);
 
-    return FALSE;
+    return false;
 }
 
 static void
@@ -352,14 +364,17 @@ print_mailbox (const search_context_t *ctx, const mailbox_t *mailbox)
 
     /* name_addr has the name part quoted if necessary. Compare
      * 'John Doe <john@doe.com>' vs. '"Doe, John" <john@doe.com>' */
-    name_addr = internet_address_to_string (ia, FALSE);
+    name_addr = internet_address_to_string (ia, false);
 
     if (format->is_text_printer) {
 	if (ctx->output & OUTPUT_COUNT) {
 	    format->integer (format, count);
 	    format->string (format, "\t");
 	}
-	format->string (format, name_addr);
+	if (ctx->output & OUTPUT_ADDRESS)
+	    format->string (format, addr);
+	else
+	    format->string (format, name_addr);
 	format->separator (format);
     } else {
 	format->begin_map (format);
@@ -529,7 +544,7 @@ do_search_messages (search_context_t *ctx)
     if (ctx->offset < 0) {
 	unsigned count;
 	notmuch_status_t status;
-	status = notmuch_query_count_messages_st (ctx->query, &count);
+	status = notmuch_query_count_messages (ctx->query, &count);
 	if (print_status_query ("notmuch search", ctx->query, status))
 	    return 1;
 
@@ -538,7 +553,7 @@ do_search_messages (search_context_t *ctx)
 	    ctx->offset = 0;
     }
 
-    status = notmuch_query_search_messages_st (ctx->query, &messages);
+    status = notmuch_query_search_messages (ctx->query, &messages);
     if (print_status_query ("notmuch search", ctx->query, status))
 	return 1;
 
@@ -629,7 +644,7 @@ do_search_tags (const search_context_t *ctx)
 	tags = notmuch_database_get_all_tags (notmuch);
     } else {
 	notmuch_status_t status;
-	status = notmuch_query_search_messages_st (query, &messages);
+	status = notmuch_query_search_messages (query, &messages);
 	if (print_status_query ("notmuch search", query, status))
 	    return 1;
 
@@ -735,11 +750,19 @@ _notmuch_search_prepare (search_context_t *ctx, notmuch_config_t *config, int ar
     if (ctx->exclude != NOTMUCH_EXCLUDE_FALSE) {
 	const char **search_exclude_tags;
 	size_t search_exclude_tags_length;
+	notmuch_status_t status;
 
 	search_exclude_tags = notmuch_config_get_search_exclude_tags
 	    (config, &search_exclude_tags_length);
-	for (i = 0; i < search_exclude_tags_length; i++)
-	    notmuch_query_add_tag_exclude (ctx->query, search_exclude_tags[i]);
+
+	for (i = 0; i < search_exclude_tags_length; i++) {
+	    status = notmuch_query_add_tag_exclude (ctx->query, search_exclude_tags[i]);
+	    if (status && status != NOTMUCH_STATUS_IGNORED) {
+		print_status_query ("notmuch search", ctx->query, status);
+		return EXIT_FAILURE;
+	    }
+	}
+
 	notmuch_query_set_omit_excluded (ctx->query, ctx->exclude);
     }
 
@@ -767,18 +790,18 @@ static search_context_t search_context = {
 };
 
 static const notmuch_opt_desc_t common_options[] = {
-    { NOTMUCH_OPT_KEYWORD, &search_context.sort, "sort", 's',
+    { .opt_keyword = &search_context.sort, .name = "sort", .keywords =
       (notmuch_keyword_t []){ { "oldest-first", NOTMUCH_SORT_OLDEST_FIRST },
 			      { "newest-first", NOTMUCH_SORT_NEWEST_FIRST },
 			      { 0, 0 } } },
-    { NOTMUCH_OPT_KEYWORD, &search_context.format_sel, "format", 'f',
+    { .opt_keyword = &search_context.format_sel, .name = "format", .keywords =
       (notmuch_keyword_t []){ { "json", NOTMUCH_FORMAT_JSON },
 			      { "sexp", NOTMUCH_FORMAT_SEXP },
 			      { "text", NOTMUCH_FORMAT_TEXT },
 			      { "text0", NOTMUCH_FORMAT_TEXT0 },
 			      { 0, 0 } } },
-    { NOTMUCH_OPT_INT, &notmuch_format_version, "format-version", 0, 0 },
-    { 0, 0, 0, 0, 0 }
+    { .opt_int = &notmuch_format_version, .name = "format-version" },
+    { }
 };
 
 int
@@ -788,25 +811,25 @@ notmuch_search_command (notmuch_config_t *config, int argc, char *argv[])
     int opt_index, ret;
 
     notmuch_opt_desc_t options[] = {
-	{ NOTMUCH_OPT_KEYWORD, &ctx->output, "output", 'o',
+	{ .opt_keyword = &ctx->output, .name = "output", .keywords =
 	  (notmuch_keyword_t []){ { "summary", OUTPUT_SUMMARY },
 				  { "threads", OUTPUT_THREADS },
 				  { "messages", OUTPUT_MESSAGES },
 				  { "files", OUTPUT_FILES },
 				  { "tags", OUTPUT_TAGS },
 				  { 0, 0 } } },
-        { NOTMUCH_OPT_KEYWORD, &ctx->exclude, "exclude", 'x',
+        { .opt_keyword = &ctx->exclude, .name = "exclude", .keywords =
           (notmuch_keyword_t []){ { "true", NOTMUCH_EXCLUDE_TRUE },
                                   { "false", NOTMUCH_EXCLUDE_FALSE },
                                   { "flag", NOTMUCH_EXCLUDE_FLAG },
                                   { "all", NOTMUCH_EXCLUDE_ALL },
                                   { 0, 0 } } },
-	{ NOTMUCH_OPT_INT, &ctx->offset, "offset", 'O', 0 },
-	{ NOTMUCH_OPT_INT, &ctx->limit, "limit", 'L', 0  },
-	{ NOTMUCH_OPT_INT, &ctx->dupe, "duplicate", 'D', 0  },
-	{ NOTMUCH_OPT_INHERIT, (void *) &common_options, NULL, 0, 0 },
-	{ NOTMUCH_OPT_INHERIT, (void *) &notmuch_shared_options, NULL, 0, 0 },
-	{ 0, 0, 0, 0, 0 }
+	{ .opt_int = &ctx->offset, .name = "offset" },
+	{ .opt_int = &ctx->limit, .name = "limit" },
+	{ .opt_int = &ctx->dupe, .name = "duplicate" },
+	{ .opt_inherit = common_options },
+	{ .opt_inherit = notmuch_shared_options },
+	{ }
     };
 
     ctx->output = OUTPUT_SUMMARY;
@@ -854,23 +877,24 @@ notmuch_address_command (notmuch_config_t *config, int argc, char *argv[])
     int opt_index, ret;
 
     notmuch_opt_desc_t options[] = {
-	{ NOTMUCH_OPT_KEYWORD_FLAGS, &ctx->output, "output", 'o',
+	{ .opt_flags = &ctx->output, .name = "output", .keywords =
 	  (notmuch_keyword_t []){ { "sender", OUTPUT_SENDER },
 				  { "recipients", OUTPUT_RECIPIENTS },
 				  { "count", OUTPUT_COUNT },
+				  { "address", OUTPUT_ADDRESS },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_KEYWORD, &ctx->exclude, "exclude", 'x',
+	{ .opt_keyword = &ctx->exclude, .name = "exclude", .keywords =
 	  (notmuch_keyword_t []){ { "true", NOTMUCH_EXCLUDE_TRUE },
 				  { "false", NOTMUCH_EXCLUDE_FALSE },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_KEYWORD, &ctx->dedup, "deduplicate", 'D',
+	{ .opt_keyword = &ctx->dedup, .name = "deduplicate", .keywords =
 	  (notmuch_keyword_t []){ { "no", DEDUP_NONE },
 				  { "mailbox", DEDUP_MAILBOX },
 				  { "address", DEDUP_ADDRESS },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_INHERIT, (void *) &common_options, NULL, 0, 0 },
-	{ NOTMUCH_OPT_INHERIT, (void *) &notmuch_shared_options, NULL, 0, 0 },
-	{ 0, 0, 0, 0, 0 }
+	{ .opt_inherit = common_options },
+	{ .opt_inherit = notmuch_shared_options },
+	{ }
     };
 
     opt_index = parse_arguments (argc, argv, options, 1);

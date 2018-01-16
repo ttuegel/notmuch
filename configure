@@ -19,7 +19,12 @@ To work around this problem you may try to execute:
 # Store original IFS value so it can be changed (and restored) in many places.
 readonly DEFAULT_IFS="$IFS"
 
+# The top-level directory for the source. This ./configure and all Makefiles
+# are good with ${srcdir} usually being relative. Some components (e.g. tests)
+# are executed in subdirectories and for those it is simpler to use
+# ${NOTMUCH_SRCDIR} which holds absolute path to the source.
 srcdir=$(dirname "$0")
+NOTMUCH_SRCDIR=$(cd "$srcdir" && pwd)
 
 subdirs="util compat lib parse-time-string completion doc emacs"
 subdirs="${subdirs} performance-test test test/test-databases"
@@ -35,13 +40,15 @@ if [ "$srcdir" != "." ]; then
 	cp "$srcdir"/"$dir"/Makefile "$dir"
     done
 
-    # Easiest way to get the test suite to work is to just copy the
-    # whole thing into the build directory.
-    cp -a "$srcdir"/test/* test
-
     # Emacs only likes to generate compiled files next to the .el files
     # by default so copy these as well (which is not ideal).
     cp -a "$srcdir"/emacs/*.el emacs
+
+    # We were not able to create fully working Makefile using ruby mkmf.rb
+    # so ruby bindings source files are copied as well (ditto -- not ideal).
+    mkdir bindings/ruby
+    cp -a "$srcdir"/bindings/ruby/*.[ch] bindings/ruby
+    cp -a "$srcdir"/bindings/ruby/extconf.rb bindings/ruby
 fi
 
 # Set several defaults (optionally specified by the user in
@@ -132,7 +139,7 @@ Fine tuning of some installation directories is available:
 	--sysconfdir=DIR	Read-only single-machine data [PREFIX/etc]
 	--emacslispdir=DIR	Emacs code [PREFIX/share/emacs/site-lisp]
 	--emacsetcdir=DIR	Emacs miscellaneous files [PREFIX/share/emacs/site-lisp]
-	--bashcompletiondir=DIR Bash completions files [SYSCONFDIR/bash_completion.d]
+	--bashcompletiondir=DIR Bash completions files [PREFIX/share/bash-completion/completions]
 	--zshcompletiondir=DIR	Zsh completions files [PREFIX/share/zsh/functions/Completion/Unix]
 
 Some features can be disabled (--with-feature=no is equivalent to
@@ -311,22 +318,29 @@ errors=0
 printf "int main(void){return 0;}\n" > minimal.c
 
 printf "Sanity checking C compilation environment... "
-if ${CC} ${CFLAGS} ${CPPFLAGS} minimal.c ${LDFLAGS} -o minimal > /dev/null 2>&1
+test_cmdline="${CC} ${CFLAGS} ${CPPFLAGS} minimal.c ${LDFLAGS} -o minimal"
+if  ${test_cmdline} > /dev/null 2>&1
 then
     printf "OK.\n"
 else
     printf "Fail.\n"
     errors=$((errors + 1))
+    printf Executed:; printf ' %s' ${test_cmdline}; echo
+    ${test_cmdline}
 fi
 
 printf "Sanity checking C++ compilation environment... "
-if ${CXX} ${CXXFLAGS_for_sh} ${CPPFLAGS} minimal.c ${LDFLAGS} -o minimal > /dev/null 2>&1
+test_cmdline="${CXX} ${CXXFLAGS_for_sh} ${CPPFLAGS} minimal.c ${LDFLAGS} -o minimal"
+if ${test_cmdline} > /dev/null 2>&1
 then
     printf "OK.\n"
 else
     printf "Fail.\n"
     errors=$((errors + 1))
+    printf Executed:; printf ' %s' ${test_cmdline}; echo
+    ${test_cmdline}
 fi
+unset test_cmdline
 
 if [ $errors -gt 0 ]; then
     cat <<EOF
@@ -352,8 +366,8 @@ int main(void) {
     return 0;
 }
 EOF
-if ${CC} ${CFLAGS} _libversion.c -o _libversion > /dev/null 2>&1 && \
-       ./_libversion > _libversion.sh && . ./_libversion.sh
+if ${CC} ${CFLAGS} -I"$srcdir" _libversion.c -o _libversion > /dev/null 2>&1 \
+       && ./_libversion > _libversion.sh && . ./_libversion.sh
 then
     printf "OK.\n"
 else
@@ -464,15 +478,30 @@ fi
 # we need to have a version >= 2.6.5 to avoid a crypto bug. We need
 # 2.6.7 for permissive "From " header handling.
 GMIME_MINVER=2.6.7
+GMIME3_MINVER=3.0.3
 
 printf "Checking for GMime development files... "
-if pkg-config --exists "gmime-2.6 >= $GMIME_MINVER"; then
-    printf "Yes.\n"
+if pkg-config --exists "gmime-3.0 > $GMIME3_MINVER"; then
+    printf "Yes (3.0).\n"
+    have_gmime=1
+    gmime_cflags=$(pkg-config --cflags gmime-3.0)
+    gmime_ldflags=$(pkg-config --libs gmime-3.0)
+    gmime_major=3
+    have_gmime_session_keys=1
+elif pkg-config --exists "gmime-2.6 >= $GMIME_MINVER"; then
+    printf "Yes (2.6).\n"
     have_gmime=1
     gmime_cflags=$(pkg-config --cflags gmime-2.6)
     gmime_ldflags=$(pkg-config --libs gmime-2.6)
+    gmime_major=2
+    if pkg-config --exists "gmime-2.6 >= 2.6.21"; then
+        have_gmime_session_keys=1
+    else
+        have_gmime_session_keys=0
+    fi
 else
     have_gmime=0
+    have_gmime_session_keys=0
     printf "No.\n"
     errors=$((errors + 1))
 fi
@@ -528,7 +557,7 @@ fi
 printf "Checking for python... "
 have_python=0
 
-for name in ${PYTHON} python python2 python3; do
+for name in ${PYTHON} python3 python python2; do
     if command -v $name > /dev/null; then
 	have_python=1
 	python=$name
@@ -619,6 +648,15 @@ if [ $WITH_DESKTOP = "1" ]; then
 	printf "No (so will not install .desktop file).\n"
 	WITH_DESKTOP=0
     fi
+fi
+
+printf "Checking for cppcheck... "
+if command -v cppcheck > /dev/null; then
+    have_cppcheck=1
+    printf "Yes.\n"
+else
+    have_cppcheck=0
+    printf "No.\n"
 fi
 
 libdir_in_ldconfig=0
@@ -913,6 +951,7 @@ cat > Makefile.config <<EOF
 # the configure script). This may be different than the build
 # directory (the current directory at the time configure was run).
 srcdir = ${srcdir}
+NOTMUCH_SRCDIR = ${NOTMUCH_SRCDIR}
 
 # subdirectories to build
 subdirs = ${subdirs}
@@ -1030,7 +1069,7 @@ HAVE_DOXYGEN=${have_doxygen}
 desktop_dir = \$(prefix)/share/applications
 
 # The directory to which bash completions files should be installed
-bash_completion_dir = ${BASHCOMPLETIONDIR:=\$(sysconfdir)/bash_completion.d}
+bash_completion_dir = ${BASHCOMPLETIONDIR:=\$(prefix)/share/bash-completion/completions}
 
 # The directory to which zsh completions files should be installed
 zsh_completion_dir = ${ZSHCOMLETIONDIR:=\$(prefix)/share/zsh/functions/Completion/Unix}
@@ -1038,6 +1077,9 @@ zsh_completion_dir = ${ZSHCOMLETIONDIR:=\$(prefix)/share/zsh/functions/Completio
 # Whether the canonicalize_file_name function is available (if not, then notmuch will
 # build its own version)
 HAVE_CANONICALIZE_FILE_NAME = ${have_canonicalize_file_name}
+
+# Whether the cppcheck static checker is available
+HAVE_CPPCHECK = ${have_cppcheck}
 
 # Whether the getline function is available (if not, then notmuch will
 # build its own version)
@@ -1061,6 +1103,9 @@ HAVE_TIMEGM = ${have_timegm}
 
 # Whether struct dirent has d_type (if not, then notmuch will use stat)
 HAVE_D_TYPE = ${have_d_type}
+
+# Whether the GMime version can handle extraction and reuse of session keys
+HAVE_GMIME_SESSION_KEYS = ${have_gmime_session_keys}
 
 # Whether the Xapian version in use supports compaction
 HAVE_XAPIAN_COMPACT = ${have_xapian_compact}
@@ -1140,6 +1185,7 @@ COMMON_CONFIGURE_CFLAGS = \\
 	\$(GMIME_CFLAGS) \$(TALLOC_CFLAGS) \$(ZLIB_CFLAGS)	\\
 	-DHAVE_VALGRIND=\$(HAVE_VALGRIND) \$(VALGRIND_CFLAGS)	\\
 	-DHAVE_GETLINE=\$(HAVE_GETLINE)				\\
+	-DWITH_EMACS=\$(WITH_EMACS)				\\
 	-DHAVE_CANONICALIZE_FILE_NAME=\$(HAVE_CANONICALIZE_FILE_NAME) \\
 	-DHAVE_STRCASESTR=\$(HAVE_STRCASESTR)			\\
 	-DHAVE_STRSEP=\$(HAVE_STRSEP)				\\
@@ -1147,6 +1193,7 @@ COMMON_CONFIGURE_CFLAGS = \\
 	-DHAVE_D_TYPE=\$(HAVE_D_TYPE)				\\
 	-DSTD_GETPWUID=\$(STD_GETPWUID)				\\
 	-DSTD_ASCTIME=\$(STD_ASCTIME)				\\
+	-DHAVE_GMIME_SESSION_KEYS=\$(HAVE_GMIME_SESSION_KEYS)	\\
 	-DHAVE_XAPIAN_COMPACT=\$(HAVE_XAPIAN_COMPACT)		\\
 	-DSILENCE_XAPIAN_DEPRECATION_WARNINGS			\\
 	-DHAVE_XAPIAN_FIELD_PROCESSOR=\$(HAVE_XAPIAN_FIELD_PROCESSOR) \\
@@ -1164,6 +1211,8 @@ cat > sh.config <<EOF
 # This sh.config was automatically generated by the ./configure
 # script of notmuch.
 
+NOTMUCH_SRCDIR='${NOTMUCH_SRCDIR}'
+
 # Whether the Xapian version in use supports compaction
 NOTMUCH_HAVE_XAPIAN_COMPACT=${have_xapian_compact}
 
@@ -1172,6 +1221,9 @@ NOTMUCH_HAVE_XAPIAN_FIELD_PROCESSOR=${have_xapian_field_processor}
 
 # Whether the Xapian version in use supports lock retry
 NOTMUCH_HAVE_XAPIAN_DB_RETRY_LOCK=${have_xapian_db_retry_lock}
+
+# Whether the GMime version can handle extraction and reuse of session keys
+NOTMUCH_HAVE_GMIME_SESSION_KEYS=${have_gmime_session_keys}
 
 # Which backend will Xapian use by default?
 NOTMUCH_DEFAULT_XAPIAN_BACKEND=${default_xapian_backend}
@@ -1185,6 +1237,12 @@ NOTMUCH_PYTHON=${python}
 # Are the ruby development files (and ruby) available? If not skip
 # building/testing ruby bindings.
 NOTMUCH_HAVE_RUBY_DEV=${have_ruby_dev}
+
+# Major version of gmime
+NOTMUCH_GMIME_MAJOR=${gmime_major}
+
+# Platform we are run on
+PLATFORM=${platform}
 EOF
 
 # Finally, after everything configured, inform the user how to continue.

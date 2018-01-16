@@ -27,12 +27,6 @@ enum {
     OUTPUT_FILES,
 };
 
-/* The following is to allow future options to be added more easily */
-enum {
-    EXCLUDE_TRUE,
-    EXCLUDE_FALSE,
-};
-
 /* Return the number of files matching the query, or -1 for an error */
 static int
 count_files (notmuch_query_t *query)
@@ -43,7 +37,7 @@ count_files (notmuch_query_t *query)
     notmuch_status_t status;
     int count = 0;
 
-    status = notmuch_query_search_messages_st (query, &messages);
+    status = notmuch_query_search_messages (query, &messages);
     if (print_status_query ("notmuch count", query, status))
 	return -1;
 
@@ -87,18 +81,23 @@ print_count (notmuch_database_t *notmuch, const char *query_str,
 	return -1;
     }
 
-    for (i = 0; i < exclude_tags_length; i++)
-	notmuch_query_add_tag_exclude (query, exclude_tags[i]);
+    for (i = 0; i < exclude_tags_length; i++) {
+	status = notmuch_query_add_tag_exclude (query, exclude_tags[i]);
+	if (status && status != NOTMUCH_STATUS_IGNORED) {
+	    print_status_query ("notmuch count", query, status);
+	    return -1;
+	}
+    }
 
     switch (output) {
     case OUTPUT_MESSAGES:
-	status = notmuch_query_count_messages_st (query, &ucount);
+	status = notmuch_query_count_messages (query, &ucount);
 	if (print_status_query ("notmuch count", query, status))
 	    return -1;
 	printf ("%u", ucount);
 	break;
     case OUTPUT_THREADS:
-	status = notmuch_query_count_threads_st (query, &ucount);
+	status = notmuch_query_count_threads (query, &ucount);
 	if (print_status_query ("notmuch count", query, status))
 	    return -1;
 	printf ("%u", ucount);
@@ -106,7 +105,7 @@ print_count (notmuch_database_t *notmuch, const char *query_str,
     case OUTPUT_FILES:
 	count = count_files (query);
 	if (count >= 0) {
-	    printf ("%u", count);
+	    printf ("%d", count);
 	} else {
 	    ret = -1;
 	    goto DONE;
@@ -155,30 +154,27 @@ notmuch_count_command (notmuch_config_t *config, int argc, char *argv[])
     char *query_str;
     int opt_index;
     int output = OUTPUT_MESSAGES;
-    int exclude = EXCLUDE_TRUE;
+    bool exclude = true;
     const char **search_exclude_tags = NULL;
     size_t search_exclude_tags_length = 0;
-    notmuch_bool_t batch = FALSE;
-    notmuch_bool_t print_lastmod = FALSE;
+    bool batch = false;
+    bool print_lastmod = false;
     FILE *input = stdin;
-    char *input_file_name = NULL;
+    const char *input_file_name = NULL;
     int ret;
 
     notmuch_opt_desc_t options[] = {
-	{ NOTMUCH_OPT_KEYWORD, &output, "output", 'o',
+	{ .opt_keyword = &output, .name = "output", .keywords =
 	  (notmuch_keyword_t []){ { "threads", OUTPUT_THREADS },
 				  { "messages", OUTPUT_MESSAGES },
 				  { "files", OUTPUT_FILES },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_KEYWORD, &exclude, "exclude", 'x',
-	  (notmuch_keyword_t []){ { "true", EXCLUDE_TRUE },
-				  { "false", EXCLUDE_FALSE },
-				  { 0, 0 } } },
-	{ NOTMUCH_OPT_BOOLEAN, &print_lastmod, "lastmod", 'l', 0 },
-	{ NOTMUCH_OPT_BOOLEAN, &batch, "batch", 0, 0 },
-	{ NOTMUCH_OPT_STRING, &input_file_name, "input", 'i', 0 },
-	{ NOTMUCH_OPT_INHERIT, (void *) &notmuch_shared_options, NULL, 0, 0 },
-	{ 0, 0, 0, 0, 0 }
+	{ .opt_bool = &exclude, .name = "exclude" },
+	{ .opt_bool = &print_lastmod, .name = "lastmod" },
+	{ .opt_bool = &batch, .name = "batch" },
+	{ .opt_string = &input_file_name, .name = "input" },
+	{ .opt_inherit = notmuch_shared_options },
+	{ }
     };
 
     opt_index = parse_arguments (argc, argv, options, 1);
@@ -188,7 +184,7 @@ notmuch_count_command (notmuch_config_t *config, int argc, char *argv[])
     notmuch_process_shared_options (argv[0]);
 
     if (input_file_name) {
-	batch = TRUE;
+	batch = true;
 	input = fopen (input_file_name, "r");
 	if (input == NULL) {
 	    fprintf (stderr, "Error opening %s for reading: %s\n",
@@ -199,6 +195,8 @@ notmuch_count_command (notmuch_config_t *config, int argc, char *argv[])
 
     if (batch && opt_index != argc) {
 	fprintf (stderr, "--batch and query string are not compatible\n");
+	if (input)
+	    fclose (input);
 	return EXIT_FAILURE;
     }
 
@@ -214,7 +212,7 @@ notmuch_count_command (notmuch_config_t *config, int argc, char *argv[])
 	return EXIT_FAILURE;
     }
 
-    if (exclude == EXCLUDE_TRUE) {
+    if (exclude) {
 	search_exclude_tags = notmuch_config_get_search_exclude_tags
 	    (config, &search_exclude_tags_length);
     }

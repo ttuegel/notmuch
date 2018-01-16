@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 test_description="Emacs with large search results buffer"
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
 x=xxxxxxxxxx # 10
 x=$x$x$x$x$x$x$x$x$x$x # 100
@@ -27,6 +27,6 @@ test_emacs '(notmuch-search "*")
 	    (notmuch-test-wait)
 	    (test-output)'
 sed -i -e s',  *, ,g' -e 's/xxx*/[BLOB]/g' OUTPUT
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 test_done

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 test_description="DatabaseModifiedError handling"
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
 # add enough messages to trigger the exception
 add_email_corpus
@@ -35,7 +35,7 @@ main (int argc, char **argv)
 
     EXPECT0 (notmuch_database_open (path, NOTMUCH_DATABASE_MODE_READ_WRITE, &rw_db));
     query = notmuch_query_create(rw_db, "");
-    EXPECT0 (notmuch_query_search_messages_st (query, &messages));
+    EXPECT0 (notmuch_query_search_messages (query, &messages));
 
     for (;
 	 notmuch_messages_valid (messages);

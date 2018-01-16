@@ -31,9 +31,12 @@ $(TAR_FILE):
 	fi ; \
 	git archive --format=tar --prefix=$(PACKAGE)-$(VERSION)/ $$ref > $(TAR_FILE).tmp
 	echo $(VERSION) > version.tmp
-	tar --append -f $(TAR_FILE).tmp --transform s_^_$(PACKAGE)-$(VERSION)/_  --transform 's_.tmp$$__' version.tmp
+	ct=`git --no-pager log -1 --pretty=format:%ct $$ref` ; \
+	tar --owner root --group root --append -f $(TAR_FILE).tmp \
+		--transform s_^_$(PACKAGE)-$(VERSION)/_  \
+		--transform 's_.tmp$$__' --mtime=@$$ct version.tmp
 	rm version.tmp
-	gzip < $(TAR_FILE).tmp > $(TAR_FILE)
+	gzip -n < $(TAR_FILE).tmp > $(TAR_FILE)
 	@echo "Source is ready for release in $(TAR_FILE)"
 
 $(SHA256_FILE): $(TAR_FILE)
@@ -70,11 +73,11 @@ release: verify-source-tree-and-version
 	pristine-tar commit $(DEB_TAR_FILE) $(UPSTREAM_TAG)
 	git tag -s -m "$(PACKAGE) Debian $(VERSION)-1 upload (same as $(VERSION))" $(DEB_TAG)
 	mkdir -p releases
-	mv $(TAR_FILE) $(SHA1_FILE) $(GPG_FILE) releases
+	mv $(TAR_FILE) $(SHA256_FILE) $(GPG_FILE) releases
 	$(MAKE) VERSION=$(VERSION) release-message > $(PACKAGE)-$(VERSION).announce
 ifeq ($(REALLY_UPLOAD),yes)
 	git push origin $(VERSION)
-	cd releases && scp $(TAR_FILE) $(SHA1_FILE) $(GPG_FILE) $(RELEASE_HOST):$(RELEASE_DIR)
+	cd releases && scp $(TAR_FILE) $(SHA256_FILE) $(GPG_FILE) $(RELEASE_HOST):$(RELEASE_DIR)
 	ssh $(RELEASE_HOST) "rm -f $(RELEASE_DIR)/LATEST-$(PACKAGE)-* ; ln -s $(TAR_FILE) $(RELEASE_DIR)/LATEST-$(TAR_FILE)"
 endif
 	@echo "Please send a release announcement using $(PACKAGE)-$(VERSION).announce as a template."
@@ -114,9 +117,9 @@ release-message:
 	@echo ""
 	@echo "Which can be verified with:"
 	@echo ""
-	@echo "  $(RELEASE_URL)/$(SHA1_FILE)"
+	@echo "  $(RELEASE_URL)/$(SHA256_FILE)"
 	@echo -n "  "
-	@cat releases/$(SHA1_FILE)
+	@cat releases/$(SHA256_FILE)
 	@echo ""
 	@echo "  $(RELEASE_URL)/$(GPG_FILE)"
 	@echo "  (signed by `getent passwd "$$USER" | cut -d: -f 5 | cut -d, -f 1`)"
@@ -180,14 +183,14 @@ verify-newer:
 # user how to enable verbose compiles.
 ifeq ($(V),)
 quiet_DOC := "Use \"$(MAKE) V=1\" to see the verbose compile lines.\n"
-quiet = @printf $(quiet_DOC)$(eval quiet_DOC:=)"$1 $@\n"; $($(shell echo $1 | sed -e s'/ .*//'))
+quiet = @printf $(quiet_DOC)$(eval quiet_DOC:=)"$(1) $(or $(2),$@)\n"; $($(word 1, $(1)))
 endif
 # The user has explicitly enabled quiet compilation.
 ifeq ($(V),0)
-quiet = @printf "$1 $@\n"; $($(shell echo $1 | sed -e s'/ .*//'))
+quiet = @printf "$(1) $(or $(2),$@)\n"; $($(word 1, $(1)))
 endif
 # Otherwise, print the full command line.
-quiet ?= $($(shell echo $1 | sed -e s'/ .*//'))
+quiet ?= $($(word 1, $(1)))
 
 %.o: %.cc $(global_deps)
 	@mkdir -p $(patsubst %/.,%,.deps/$(@D))
@@ -197,9 +200,17 @@ quiet ?= $($(shell echo $1 | sed -e s'/ .*//'))
 	@mkdir -p $(patsubst %/.,%,.deps/$(@D))
 	$(call quiet,CC $(CPPFLAGS) $(CFLAGS)) -c $(FINAL_CFLAGS) $< -o $@ -MD -MP -MF .deps/$*.d
 
+CPPCHECK=cppcheck
+.stamps/cppcheck/%: %
+	@mkdir -p $(@D)
+	$(call quiet,CPPCHECK,$<) --template=gcc --error-exitcode=1 --quiet $<
+	@touch $@
+
+CLEAN := $(CLEAN) .stamps
+
 .PHONY : clean
 clean:
-	rm -rf $(CLEAN); rm -rf .deps
+	rm -rf $(CLEAN)
 
 .PHONY: distclean
 distclean: clean
@@ -210,6 +221,7 @@ dataclean: distclean
 	rm -rf $(DATACLEAN)
 
 notmuch_client_srcs =		\
+	$(notmuch_compat_srcs)	\
 	command-line-arguments.c\
 	debugger.c		\
 	status.c		\
@@ -222,6 +234,7 @@ notmuch_client_srcs =		\
 	notmuch-dump.c		\
 	notmuch-insert.c	\
 	notmuch-new.c		\
+	notmuch-reindex.c       \
 	notmuch-reply.c		\
 	notmuch-restore.c	\
 	notmuch-search.c	\
@@ -234,14 +247,13 @@ notmuch_client_srcs =		\
 	sprinter-text.c		\
 	query-string.c		\
 	mime-node.c		\
-	crypto.c		\
 	tag-util.c
 
 notmuch_client_modules = $(notmuch_client_srcs:.c=.o)
 
 notmuch.o: version.stamp
 
-notmuch: $(notmuch_client_modules) lib/libnotmuch.a util/libutil.a parse-time-string/libparse-time-string.a
+notmuch: $(notmuch_client_modules) lib/libnotmuch.a util/libnotmuch_util.a parse-time-string/libparse-time-string.a
 	$(call quiet,CXX $(CFLAGS)) $^ $(FINAL_LIBNOTMUCH_LDFLAGS) -o $@
 
 notmuch-shared: $(notmuch_client_modules) lib/$(LINKER_NAME)
@@ -276,8 +288,19 @@ endif
 SRCS  := $(SRCS) $(notmuch_client_srcs)
 CLEAN := $(CLEAN) notmuch notmuch-shared $(notmuch_client_modules)
 CLEAN := $(CLEAN) version.stamp notmuch-*.tar.gz.tmp
+CLEAN := $(CLEAN) .deps
 
 DISTCLEAN := $(DISTCLEAN) .first-build-message Makefile.config sh.config
+
+CPPCHECK_STAMPS := $(SRCS:%=.stamps/cppcheck/%)
+.PHONY: cppcheck
+ifeq ($(HAVE_CPPCHECK),1)
+cppcheck: ${CPPCHECK_STAMPS}
+else
+cppcheck:
+	@echo "No cppcheck found during configure; skipping static checking"
+endif
+
 
 DEPS := $(SRCS:%.c=.deps/%.d)
 DEPS := $(DEPS:%.cc=.deps/%.d)

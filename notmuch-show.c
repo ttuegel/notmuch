@@ -196,14 +196,14 @@ _is_from_line (const char *line)
 
 void
 format_headers_sprinter (sprinter_t *sp, GMimeMessage *message,
-			 notmuch_bool_t reply)
+			 bool reply)
 {
     /* Any changes to the JSON or S-Expression format should be
      * reflected in the file devel/schemata. */
 
-    InternetAddressList *recipients;
-    const char *recipients_string;
+    char *recipients_string;
     const char *reply_to_string;
+    void *local = talloc_new (sp);
 
     sp->begin_map (sp);
 
@@ -211,30 +211,30 @@ format_headers_sprinter (sprinter_t *sp, GMimeMessage *message,
     sp->string (sp, g_mime_message_get_subject (message));
 
     sp->map_key (sp, "From");
-    sp->string (sp, g_mime_message_get_sender (message));
+    sp->string (sp, g_mime_message_get_from_string (message));
 
-    recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_TO);
-    recipients_string = internet_address_list_to_string (recipients, 0);
+    recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_TO);
     if (recipients_string) {
 	sp->map_key (sp, "To");
 	sp->string (sp, recipients_string);
+	g_free (recipients_string);
     }
 
-    recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_CC);
-    recipients_string = internet_address_list_to_string (recipients, 0);
+    recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_CC);
     if (recipients_string) {
 	sp->map_key (sp, "Cc");
 	sp->string (sp, recipients_string);
+	g_free (recipients_string);
     }
 
-    recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_BCC);
-    recipients_string = internet_address_list_to_string (recipients, 0);
+    recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_BCC);
     if (recipients_string) {
 	sp->map_key (sp, "Bcc");
 	sp->string (sp, recipients_string);
+	g_free (recipients_string);
     }
 
-    reply_to_string = g_mime_message_get_reply_to (message);
+    reply_to_string = g_mime_message_get_reply_to_string (local, message);
     if (reply_to_string) {
 	sp->map_key (sp, "Reply-To");
 	sp->string (sp, reply_to_string);
@@ -248,10 +248,11 @@ format_headers_sprinter (sprinter_t *sp, GMimeMessage *message,
 	sp->string (sp, g_mime_object_get_header (GMIME_OBJECT (message), "References"));
     } else {
 	sp->map_key (sp, "Date");
-	sp->string (sp, g_mime_message_get_date_as_string (message));
+	sp->string (sp, g_mime_message_get_date_string (sp, message));
     }
 
     sp->end (sp);
+    talloc_free (local);
 }
 
 /* Write a MIME text part out to the given stream.
@@ -270,6 +271,7 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
 {
     GMimeContentType *content_type = g_mime_object_get_content_type (GMIME_OBJECT (part));
     GMimeStream *stream_filter = NULL;
+    GMimeFilter *crlf_filter = NULL;
     GMimeDataWrapper *wrapper;
     const char *charset;
 
@@ -281,8 +283,10 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
 	return;
 
     stream_filter = g_mime_stream_filter_new (stream_out);
+    crlf_filter = g_mime_filter_crlf_new (false, false);
     g_mime_stream_filter_add(GMIME_STREAM_FILTER (stream_filter),
-			     g_mime_filter_crlf_new (FALSE, FALSE));
+			     crlf_filter);
+    g_object_unref (crlf_filter);
 
     charset = g_mime_object_get_content_type_parameter (part, "charset");
     if (charset) {
@@ -301,7 +305,7 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
 
     if (flags & NOTMUCH_SHOW_TEXT_PART_REPLY) {
 	GMimeFilter *reply_filter;
-	reply_filter = g_mime_filter_reply_new (TRUE);
+	reply_filter = g_mime_filter_reply_new (true);
 	if (reply_filter) {
 	    g_mime_stream_filter_add (GMIME_STREAM_FILTER (stream_filter),
 				      reply_filter);
@@ -316,20 +320,86 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
 	g_object_unref(stream_filter);
 }
 
-/* Get signature status string (GMime 2.6) */
 static const char*
-signature_status_to_string (GMimeSignatureStatus x)
+signature_status_to_string (GMimeSignatureStatus status)
 {
-    switch (x) {
-    case GMIME_SIGNATURE_STATUS_GOOD:
-	return "good";
-    case GMIME_SIGNATURE_STATUS_BAD:
+    if (g_mime_signature_status_bad (status))
 	return "bad";
-    case GMIME_SIGNATURE_STATUS_ERROR:
+
+    if (g_mime_signature_status_error (status))
 	return "error";
-    }
+
+    if (g_mime_signature_status_good (status))
+	return "good";
+
     return "unknown";
 }
+
+/* Print signature flags */
+struct key_map_struct {
+    GMimeSignatureError bit;
+    const char * string;
+};
+
+static void
+do_format_signature_errors (sprinter_t *sp, struct key_map_struct *key_map,
+			    unsigned int array_map_len, GMimeSignatureError errors) {
+    sp->map_key (sp, "errors");
+    sp->begin_map (sp);
+
+    for (unsigned int i = 0; i < array_map_len; i++) {
+	if (errors & key_map[i].bit) {
+	    sp->map_key (sp, key_map[i].string);
+	    sp->boolean (sp, true);
+	}
+    }
+
+    sp->end (sp);
+}
+
+#if (GMIME_MAJOR_VERSION < 3)
+static void
+format_signature_errors (sprinter_t *sp, GMimeSignature *signature)
+{
+    GMimeSignatureError errors = g_mime_signature_get_errors (signature);
+
+    if (errors == GMIME_SIGNATURE_ERROR_NONE)
+	return;
+
+    struct key_map_struct key_map[] = {
+	{ GMIME_SIGNATURE_ERROR_EXPSIG, "sig-expired" },
+	{ GMIME_SIGNATURE_ERROR_NO_PUBKEY, "key-missing"},
+	{ GMIME_SIGNATURE_ERROR_EXPKEYSIG, "key-expired"},
+	{ GMIME_SIGNATURE_ERROR_REVKEYSIG, "key-revoked"},
+	{ GMIME_SIGNATURE_ERROR_UNSUPP_ALGO, "alg-unsupported"},
+    };
+
+    do_format_signature_errors (sp, key_map, ARRAY_SIZE(key_map), errors);
+}
+#else
+static void
+format_signature_errors (sprinter_t *sp, GMimeSignature *signature)
+{
+    GMimeSignatureError errors = g_mime_signature_get_errors (signature);
+
+    if (!(errors & GMIME_SIGNATURE_STATUS_ERROR_MASK))
+	return;
+
+    struct key_map_struct key_map[] = {
+	{ GMIME_SIGNATURE_STATUS_KEY_REVOKED, "key-revoked"},
+	{ GMIME_SIGNATURE_STATUS_KEY_EXPIRED, "key-expired"},
+	{ GMIME_SIGNATURE_STATUS_SIG_EXPIRED, "sig-expired" },
+	{ GMIME_SIGNATURE_STATUS_KEY_MISSING, "key-missing"},
+	{ GMIME_SIGNATURE_STATUS_CRL_MISSING, "crl-missing"},
+	{ GMIME_SIGNATURE_STATUS_CRL_TOO_OLD, "crl-too-old"},
+	{ GMIME_SIGNATURE_STATUS_BAD_POLICY, "bad-policy"},
+	{ GMIME_SIGNATURE_STATUS_SYS_ERROR, "sys-error"},
+	{ GMIME_SIGNATURE_STATUS_TOFU_CONFLICT, "tofu-conflict"},
+    };
+
+    do_format_signature_errors (sp, key_map, ARRAY_SIZE(key_map), errors);
+}
+#endif
 
 /* Signature status sprinter (GMime 2.6) */
 static void
@@ -359,7 +429,7 @@ format_part_sigstatus_sprinter (sprinter_t *sp, mime_node_t *node)
 	sp->string (sp, signature_status_to_string (status));
 
 	GMimeCertificate *certificate = g_mime_signature_get_certificate (signature);
-	if (status == GMIME_SIGNATURE_STATUS_GOOD) {
+	if (g_mime_signature_status_good (status)) {
 	    if (certificate) {
 		sp->map_key (sp, "fingerprint");
 		sp->string (sp, g_mime_certificate_get_fingerprint (certificate));
@@ -376,29 +446,29 @@ format_part_sigstatus_sprinter (sprinter_t *sp, mime_node_t *node)
 		sp->map_key (sp, "expires");
 		sp->integer (sp, expires);
 	    }
-	    /* output user id only if validity is FULL or ULTIMATE. */
-	    /* note that gmime is using the term "trust" here, which
-	     * is WRONG.  It's actually user id "validity". */
 	    if (certificate) {
-		const char *name = g_mime_certificate_get_name (certificate);
-		GMimeCertificateTrust trust = g_mime_certificate_get_trust (certificate);
-		if (name && (trust == GMIME_CERTIFICATE_TRUST_FULLY || trust == GMIME_CERTIFICATE_TRUST_ULTIMATE)) {
+		const char *uid = g_mime_certificate_get_valid_userid (certificate);
+		if (uid) {
 		    sp->map_key (sp, "userid");
-		    sp->string (sp, name);
+		    sp->string (sp, uid);
 		}
 	    }
 	} else if (certificate) {
-	    const char *key_id = g_mime_certificate_get_key_id (certificate);
+	    const char *key_id = g_mime_certificate_get_fpr16 (certificate);
 	    if (key_id) {
 		sp->map_key (sp, "keyid");
 		sp->string (sp, key_id);
 	    }
 	}
 
-	GMimeSignatureError errors = g_mime_signature_get_errors (signature);
-	if (errors != GMIME_SIGNATURE_ERROR_NONE) {
-	    sp->map_key (sp, "errors");
-	    sp->integer (sp, errors);
+	if (notmuch_format_version <= 3) {
+	    GMimeSignatureError errors = g_mime_signature_get_errors (signature);
+	    if (g_mime_signature_status_error (errors)) {
+		sp->map_key (sp, "errors");
+		sp->integer (sp, errors);
+	    }
+	} else {
+	    format_signature_errors (sp, signature);
 	}
 
 	sp->end (sp);
@@ -416,7 +486,8 @@ format_part_text (const void *ctx, sprinter_t *sp, mime_node_t *node,
     GMimeObject *meta = node->envelope_part ?
 	GMIME_OBJECT (node->envelope_part) : node->part;
     GMimeContentType *content_type = g_mime_object_get_content_type (meta);
-    const notmuch_bool_t leaf = GMIME_IS_PART (node->part);
+    const bool leaf = GMIME_IS_PART (node->part);
+    GMimeStream *stream = params->out_stream;
     const char *part_type;
     int i;
 
@@ -424,14 +495,15 @@ format_part_text (const void *ctx, sprinter_t *sp, mime_node_t *node,
 	notmuch_message_t *message = node->envelope_file;
 
 	part_type = "message";
-	printf ("\f%s{ id:%s depth:%d match:%d excluded:%d filename:%s\n",
-		part_type,
-		notmuch_message_get_message_id (message),
-		indent,
-		notmuch_message_get_flag (message, NOTMUCH_MESSAGE_FLAG_MATCH) ? 1 : 0,
-		notmuch_message_get_flag (message, NOTMUCH_MESSAGE_FLAG_EXCLUDED) ? 1 : 0,
-		notmuch_message_get_filename (message));
+	g_mime_stream_printf (stream, "\f%s{ id:%s depth:%d match:%d excluded:%d filename:%s\n",
+			      part_type,
+			      notmuch_message_get_message_id (message),
+			      indent,
+			      notmuch_message_get_flag (message, NOTMUCH_MESSAGE_FLAG_MATCH) ? 1 : 0,
+			      notmuch_message_get_flag (message, NOTMUCH_MESSAGE_FLAG_EXCLUDED) ? 1 : 0,
+			      notmuch_message_get_filename (message));
     } else {
+	char *content_string;
 	const char *disposition = _get_disposition (meta);
 	const char *cid = g_mime_object_get_content_id (meta);
 	const char *filename = leaf ?
@@ -443,49 +515,51 @@ format_part_text (const void *ctx, sprinter_t *sp, mime_node_t *node,
 	else
 	    part_type = "part";
 
-	printf ("\f%s{ ID: %d", part_type, node->part_num);
+	g_mime_stream_printf (stream, "\f%s{ ID: %d", part_type, node->part_num);
 	if (filename)
-	    printf (", Filename: %s", filename);
+	    g_mime_stream_printf (stream, ", Filename: %s", filename);
 	if (cid)
-	    printf (", Content-id: %s", cid);
-	printf (", Content-type: %s\n", g_mime_content_type_to_string (content_type));
+	    g_mime_stream_printf (stream, ", Content-id: %s", cid);
+
+	content_string = g_mime_content_type_to_string (content_type);
+	g_mime_stream_printf (stream, ", Content-type: %s\n", content_string);
+	g_free (content_string);
     }
 
     if (GMIME_IS_MESSAGE (node->part)) {
 	GMimeMessage *message = GMIME_MESSAGE (node->part);
-	InternetAddressList *recipients;
-	const char *recipients_string;
+	char *recipients_string;
+	char *date_string;
 
-	printf ("\fheader{\n");
+	g_mime_stream_printf (stream, "\fheader{\n");
 	if (node->envelope_file)
-	    printf ("%s\n", _get_one_line_summary (ctx, node->envelope_file));
-	printf ("Subject: %s\n", g_mime_message_get_subject (message));
-	printf ("From: %s\n", g_mime_message_get_sender (message));
-	recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_TO);
-	recipients_string = internet_address_list_to_string (recipients, 0);
+	    g_mime_stream_printf (stream, "%s\n", _get_one_line_summary (ctx, node->envelope_file));
+	g_mime_stream_printf (stream, "Subject: %s\n", g_mime_message_get_subject (message));
+	g_mime_stream_printf (stream, "From: %s\n", g_mime_message_get_from_string (message));
+	recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_TO);
 	if (recipients_string)
-	    printf ("To: %s\n", recipients_string);
-	recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_CC);
-	recipients_string = internet_address_list_to_string (recipients, 0);
+	    g_mime_stream_printf (stream, "To: %s\n", recipients_string);
+	g_free (recipients_string);
+	recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_CC);
 	if (recipients_string)
-	    printf ("Cc: %s\n", recipients_string);
-	printf ("Date: %s\n", g_mime_message_get_date_as_string (message));
-	printf ("\fheader}\n");
+	    g_mime_stream_printf (stream, "Cc: %s\n", recipients_string);
+	g_free (recipients_string);
+	date_string = g_mime_message_get_date_string (node, message);
+	g_mime_stream_printf (stream, "Date: %s\n", date_string);
+	g_mime_stream_printf (stream, "\fheader}\n");
 
-	printf ("\fbody{\n");
+	g_mime_stream_printf (stream, "\fbody{\n");
     }
 
     if (leaf) {
 	if (g_mime_content_type_is_type (content_type, "text", "*") &&
 	    !g_mime_content_type_is_type (content_type, "text", "html"))
 	{
-	    GMimeStream *stream_stdout = g_mime_stream_file_new (stdout);
-	    g_mime_stream_file_set_owner (GMIME_STREAM_FILE (stream_stdout), FALSE);
-	    show_text_part_content (node->part, stream_stdout, 0);
-	    g_object_unref(stream_stdout);
+	    show_text_part_content (node->part, stream, 0);
 	} else {
-	    printf ("Non-text part: %s\n",
-		    g_mime_content_type_to_string (content_type));
+	    char *content_string = g_mime_content_type_to_string (content_type);
+	    g_mime_stream_printf (stream, "Non-text part: %s\n", content_string);
+	    g_free (content_string);
 	}
     }
 
@@ -493,9 +567,9 @@ format_part_text (const void *ctx, sprinter_t *sp, mime_node_t *node,
 	format_part_text (ctx, sp, mime_node_child (node, i), indent, params);
 
     if (GMIME_IS_MESSAGE (node->part))
-	printf ("\fbody}\n");
+	g_mime_stream_printf (stream, "\fbody}\n");
 
-    printf ("\f%s}\n", part_type);
+    g_mime_stream_printf (stream, "\f%s}\n", part_type);
 
     return NOTMUCH_STATUS_SUCCESS;
 }
@@ -525,8 +599,8 @@ format_omitted_part_meta_sprinter (sprinter_t *sp, GMimeObject *meta, GMimePart 
 
 void
 format_part_sprinter (const void *ctx, sprinter_t *sp, mime_node_t *node,
-		      notmuch_bool_t first, notmuch_bool_t output_body,
-		      notmuch_bool_t include_html)
+		      bool output_body,
+		      bool include_html)
 {
     /* Any changes to the JSON or S-Expression format should be
      * reflected in the file devel/schemata. */
@@ -536,12 +610,12 @@ format_part_sprinter (const void *ctx, sprinter_t *sp, mime_node_t *node,
 	format_message_sprinter (sp, node->envelope_file);
 
 	sp->map_key (sp, "headers");
-	format_headers_sprinter (sp, GMIME_MESSAGE (node->part), FALSE);
+	format_headers_sprinter (sp, GMIME_MESSAGE (node->part), false);
 
 	if (output_body) {
 	    sp->map_key (sp, "body");
 	    sp->begin_list (sp);
-	    format_part_sprinter (ctx, sp, mime_node_child (node, 0), first, TRUE, include_html);
+	    format_part_sprinter (ctx, sp, mime_node_child (node, 0), true, include_html);
 	    sp->end (sp);
 	}
 	sp->end (sp);
@@ -553,6 +627,7 @@ format_part_sprinter (const void *ctx, sprinter_t *sp, mime_node_t *node,
     GMimeObject *meta = node->envelope_part ?
 	GMIME_OBJECT (node->envelope_part) : node->part;
     GMimeContentType *content_type = g_mime_object_get_content_type (meta);
+    char *content_string;
     const char *disposition = _get_disposition (meta);
     const char *cid = g_mime_object_get_content_id (meta);
     const char *filename = GMIME_IS_PART (node->part) ?
@@ -581,7 +656,9 @@ format_part_sprinter (const void *ctx, sprinter_t *sp, mime_node_t *node,
     }
 
     sp->map_key (sp, "content-type");
-    sp->string (sp, g_mime_content_type_to_string (content_type));
+    content_string = g_mime_content_type_to_string (content_type);
+    sp->string (sp, content_string);
+    g_free (content_string);
 
     if (disposition) {
 	sp->map_key (sp, "content-disposition");
@@ -632,7 +709,7 @@ format_part_sprinter (const void *ctx, sprinter_t *sp, mime_node_t *node,
 	sp->begin_map (sp);
 
 	sp->map_key (sp, "headers");
-	format_headers_sprinter (sp, GMIME_MESSAGE (node->part), FALSE);
+	format_headers_sprinter (sp, GMIME_MESSAGE (node->part), false);
 
 	sp->map_key (sp, "body");
 	sp->begin_list (sp);
@@ -640,7 +717,7 @@ format_part_sprinter (const void *ctx, sprinter_t *sp, mime_node_t *node,
     }
 
     for (i = 0; i < node->nchildren; i++)
-	format_part_sprinter (ctx, sp, mime_node_child (node, i), i == 0, TRUE, include_html);
+	format_part_sprinter (ctx, sp, mime_node_child (node, i), true, include_html);
 
     /* Close content structures */
     for (i = 0; i < nclose; i++)
@@ -654,7 +731,7 @@ format_part_sprinter_entry (const void *ctx, sprinter_t *sp,
 			    mime_node_t *node, unused (int indent),
 			    const notmuch_show_params_t *params)
 {
-    format_part_sprinter (ctx, sp, node, TRUE, params->output_body, params->include_html);
+    format_part_sprinter (ctx, sp, node, params->output_body, params->include_html);
 
     return NOTMUCH_STATUS_SUCCESS;
 }
@@ -719,7 +796,7 @@ format_part_mbox (const void *ctx, unused (sprinter_t *sp), mime_node_t *node,
 static notmuch_status_t
 format_part_raw (unused (const void *ctx), unused (sprinter_t *sp),
 		 mime_node_t *node, unused (int indent),
-		 unused (const notmuch_show_params_t *params))
+		 const notmuch_show_params_t *params)
 {
     if (node->envelope_file) {
 	/* Special case the entire message to avoid MIME parsing. */
@@ -759,13 +836,7 @@ format_part_raw (unused (const void *ctx), unused (sprinter_t *sp),
 	return NOTMUCH_STATUS_SUCCESS;
     }
 
-    GMimeStream *stream_stdout;
-    GMimeStream *stream_filter = NULL;
-
-    stream_stdout = g_mime_stream_file_new (stdout);
-    g_mime_stream_file_set_owner (GMIME_STREAM_FILE (stream_stdout), FALSE);
-
-    stream_filter = g_mime_stream_filter_new (stream_stdout);
+    GMimeStream *stream_filter = g_mime_stream_filter_new (params->out_stream);
 
     if (GMIME_IS_PART (node->part)) {
 	/* For leaf parts, we emit only the transfer-decoded
@@ -787,9 +858,6 @@ format_part_raw (unused (const void *ctx), unused (sprinter_t *sp),
 
     if (stream_filter)
 	g_object_unref (stream_filter);
-
-    if (stream_stdout)
-	g_object_unref(stream_stdout);
 
     return NOTMUCH_STATUS_SUCCESS;
 }
@@ -826,8 +894,8 @@ show_messages (void *ctx,
 	       notmuch_show_params_t *params)
 {
     notmuch_message_t *message;
-    notmuch_bool_t match;
-    notmuch_bool_t excluded;
+    bool match;
+    bool excluded;
     int next_indent;
     notmuch_status_t status, res = NOTMUCH_STATUS_SUCCESS;
 
@@ -886,16 +954,16 @@ do_show_single (void *ctx,
     notmuch_status_t status;
     unsigned int count;
 
-    status = notmuch_query_count_messages_st (query, &count);
+    status = notmuch_query_count_messages (query, &count);
     if (print_status_query ("notmuch show", query, status))
 	return 1;
 
     if (count != 1) {
-	fprintf (stderr, "Error: search term did not match precisely one message (matched %d messages).\n", count);
+	fprintf (stderr, "Error: search term did not match precisely one message (matched %u messages).\n", count);
 	return 1;
     }
 
-    status = notmuch_query_search_messages_st (query, &messages);
+    status = notmuch_query_search_messages (query, &messages);
     if (print_status_query ("notmuch show", query, status))
 	return 1;
 
@@ -925,7 +993,7 @@ do_show (void *ctx,
     notmuch_messages_t *messages;
     notmuch_status_t status, res = NOTMUCH_STATUS_SUCCESS;
 
-    status= notmuch_query_search_threads_st (query, &threads);
+    status= notmuch_query_search_threads (query, &threads);
     if (print_status_query ("notmuch show", query, status))
 	return 1;
 
@@ -998,18 +1066,6 @@ static const notmuch_show_format_t *formatters[] = {
     [NOTMUCH_FORMAT_RAW] = &format_raw,
 };
 
-enum {
-    ENTIRE_THREAD_DEFAULT = -1,
-    ENTIRE_THREAD_FALSE = FALSE,
-    ENTIRE_THREAD_TRUE = TRUE,
-};
-
-/* The following is to allow future options to be added more easily */
-enum {
-    EXCLUDE_TRUE,
-    EXCLUDE_FALSE,
-};
-
 int
 notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 {
@@ -1021,39 +1077,39 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
     sprinter_t *sprinter;
     notmuch_show_params_t params = {
 	.part = -1,
-	.omit_excluded = TRUE,
-	.output_body = TRUE,
+	.omit_excluded = true,
+	.output_body = true,
+	.crypto = { .decrypt = NOTMUCH_DECRYPT_AUTO },
     };
     int format = NOTMUCH_FORMAT_NOT_SPECIFIED;
-    int exclude = EXCLUDE_TRUE;
-    int entire_thread = ENTIRE_THREAD_DEFAULT;
-    notmuch_bool_t single_message;
+    bool exclude = true;
+    bool entire_thread_set = false;
+    bool single_message;
 
     notmuch_opt_desc_t options[] = {
-	{ NOTMUCH_OPT_KEYWORD, &format, "format", 'f',
+	{ .opt_keyword = &format, .name = "format", .keywords =
 	  (notmuch_keyword_t []){ { "json", NOTMUCH_FORMAT_JSON },
 				  { "text", NOTMUCH_FORMAT_TEXT },
 				  { "sexp", NOTMUCH_FORMAT_SEXP },
 				  { "mbox", NOTMUCH_FORMAT_MBOX },
 				  { "raw", NOTMUCH_FORMAT_RAW },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_INT, &notmuch_format_version, "format-version", 0, 0 },
-	{ NOTMUCH_OPT_KEYWORD, &exclude, "exclude", 'x',
-	  (notmuch_keyword_t []){ { "true", EXCLUDE_TRUE },
-				  { "false", EXCLUDE_FALSE },
+	{ .opt_int = &notmuch_format_version, .name = "format-version" },
+	{ .opt_bool = &exclude, .name = "exclude" },
+	{ .opt_bool = &params.entire_thread, .name = "entire-thread",
+	  .present = &entire_thread_set },
+	{ .opt_int = &params.part, .name = "part" },
+	{ .opt_keyword = (int*)(&params.crypto.decrypt), .name = "decrypt",
+	  .keyword_no_arg_value = "true", .keywords =
+	  (notmuch_keyword_t []){ { "false", NOTMUCH_DECRYPT_FALSE },
+				  { "auto", NOTMUCH_DECRYPT_AUTO },
+				  { "true", NOTMUCH_DECRYPT_NOSTASH },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_KEYWORD, &entire_thread, "entire-thread", 't',
-	  (notmuch_keyword_t []){ { "true", ENTIRE_THREAD_TRUE },
-				  { "false", ENTIRE_THREAD_FALSE },
-				  { "", ENTIRE_THREAD_TRUE },
-				  { 0, 0 } } },
-	{ NOTMUCH_OPT_INT, &params.part, "part", 'p', 0 },
-	{ NOTMUCH_OPT_BOOLEAN, &params.crypto.decrypt, "decrypt", 'd', 0 },
-	{ NOTMUCH_OPT_BOOLEAN, &params.crypto.verify, "verify", 'v', 0 },
-	{ NOTMUCH_OPT_BOOLEAN, &params.output_body, "body", 'b', 0 },
-	{ NOTMUCH_OPT_BOOLEAN, &params.include_html, "include-html", 0, 0 },
-	{ NOTMUCH_OPT_INHERIT, (void *) &notmuch_shared_options, NULL, 0, 0 },
-	{ 0, 0, 0, 0, 0 }
+	{ .opt_bool = &params.crypto.verify, .name = "verify" },
+	{ .opt_bool = &params.output_body, .name = "body" },
+	{ .opt_bool = &params.include_html, .name = "include-html" },
+	{ .opt_inherit = notmuch_shared_options },
+	{ }
     };
 
     opt_index = parse_arguments (argc, argv, options, 1);
@@ -1062,9 +1118,9 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 
     notmuch_process_shared_options (argv[0]);
 
-    /* decryption implies verification */
-    if (params.crypto.decrypt)
-	params.crypto.verify = TRUE;
+    /* explicit decryption implies verification */
+    if (params.crypto.decrypt == NOTMUCH_DECRYPT_NOSTASH)
+	params.crypto.verify = true;
 
     /* specifying a part implies single message display */
     single_message = params.part >= 0;
@@ -1084,26 +1140,21 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	}
     } else if (format == NOTMUCH_FORMAT_RAW) {
 	/* raw format only supports single message display */
-	single_message = TRUE;
+	single_message = true;
     }
 
     notmuch_exit_if_unsupported_format ();
 
-    /* Default is entire-thread = FALSE except for format=json and
+    /* Default is entire-thread = false except for format=json and
      * format=sexp. */
-    if (entire_thread == ENTIRE_THREAD_DEFAULT) {
-	if (format == NOTMUCH_FORMAT_JSON || format == NOTMUCH_FORMAT_SEXP)
-	    params.entire_thread = TRUE;
-	else
-	    params.entire_thread = FALSE;
-    } else {
-	params.entire_thread = entire_thread;
-    }
+    if (! entire_thread_set &&
+	(format == NOTMUCH_FORMAT_JSON || format == NOTMUCH_FORMAT_SEXP))
+	params.entire_thread = true;
 
     if (!params.output_body) {
 	if (params.part > 0) {
 	    fprintf (stderr, "Warning: --body=false is incompatible with --part > 0. Disabling.\n");
-	    params.output_body = TRUE;
+	    params.output_body = true;
 	} else {
 	    if (format != NOTMUCH_FORMAT_JSON && format != NOTMUCH_FORMAT_SEXP)
 		fprintf (stderr,
@@ -1127,7 +1178,9 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	return EXIT_FAILURE;
     }
 
+#if (GMIME_MAJOR_VERSION < 3)
     params.crypto.gpgpath = notmuch_config_get_crypto_gpg_path (config);
+#endif
 
     if (notmuch_database_open (notmuch_config_get_database_path (config),
 			       NOTMUCH_DATABASE_MODE_READ_ONLY, &notmuch))
@@ -1145,6 +1198,8 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
     formatter = formatters[format];
     sprinter = formatter->new_sprinter(config, stdout);
 
+    params.out_stream = g_mime_stream_stdout_new ();
+
     /* If a single message is requested we do not use search_excludes. */
     if (single_message) {
 	ret = do_show_single (config, query, formatter, sprinter, &params);
@@ -1155,21 +1210,33 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	const char **search_exclude_tags;
 	size_t search_exclude_tags_length;
 	unsigned int i;
+	notmuch_status_t status;
 
 	search_exclude_tags = notmuch_config_get_search_exclude_tags
 	    (config, &search_exclude_tags_length);
-	for (i = 0; i < search_exclude_tags_length; i++)
-	    notmuch_query_add_tag_exclude (query, search_exclude_tags[i]);
 
-	if (exclude == EXCLUDE_FALSE) {
-	    notmuch_query_set_omit_excluded (query, FALSE);
-	    params.omit_excluded = FALSE;
+	for (i = 0; i < search_exclude_tags_length; i++) {
+	    status = notmuch_query_add_tag_exclude (query, search_exclude_tags[i]);
+	    if (status && status != NOTMUCH_STATUS_IGNORED) {
+		print_status_query ("notmuch show", query, status);
+		ret = -1;
+		goto DONE;
+	    }
+	}
+
+	if (exclude == false) {
+	    notmuch_query_set_omit_excluded (query, false);
+	    params.omit_excluded = false;
 	}
 
 	ret = do_show (config, query, formatter, sprinter, &params);
     }
 
-    notmuch_crypto_cleanup (&params.crypto);
+ DONE:
+    g_mime_stream_flush (params.out_stream);
+    g_object_unref (params.out_stream);
+
+    _notmuch_crypto_cleanup (&params.crypto);
     notmuch_query_destroy (query);
     notmuch_database_destroy (notmuch);
 

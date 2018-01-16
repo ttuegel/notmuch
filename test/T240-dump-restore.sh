@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 test_description="\"notmuch dump\" and \"notmuch restore\""
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
+NOTMUCH_NEW > /dev/null
+test_begin_subtest "dump header"
+cat <<EOF > EXPECTED
+#notmuch-dump batch-tag:3 config,properties,tags
+EOF
+notmuch dump > OUTPUT
+test_expect_equal_file EXPECTED OUTPUT
 add_email_corpus
 
 test_begin_subtest "Dumping all tags"
@@ -122,7 +129,7 @@ test_begin_subtest "Check for a safe set of message-ids"
 notmuch search --output=messages from:cworth | sed s/^id:// > EXPECTED
 notmuch search --output=messages from:cworth | sed s/^id:// |\
 	$TEST_DIRECTORY/hex-xcode --direction=encode > OUTPUT
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "format=batch-tag, dump sanity check."
 NOTMUCH_DUMP_TAGS --format=sup from:cworth | cut -f1 -d' ' | \

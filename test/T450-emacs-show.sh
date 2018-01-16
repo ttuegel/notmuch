@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
 test_description="emacs notmuch-show view"
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
-EXPECTED=$TEST_DIRECTORY/emacs-show.expected-output
+EXPECTED=$NOTMUCH_SRCDIR/test/emacs-show.expected-output
 
 add_email_corpus
 
@@ -27,7 +27,7 @@ EOF
 test_emacs "(notmuch-show \"id:$message_id\")
 	    (test-visible-output \"OUTPUT.raw\")"
 notmuch_date_sanitize < OUTPUT.raw > OUTPUT
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "Bare subject #1"
 output=$(test_emacs '(notmuch-show-strip-re "Re: subject")')
@@ -45,20 +45,20 @@ test_begin_subtest "don't process cryptographic MIME parts"
 test_emacs '(let ((notmuch-crypto-process-mime nil))
 	(notmuch-show "id:20091117203301.GV3165@dottiness.seas.harvard.edu")
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-process-crypto-mime-parts-off
+test_expect_equal_file $EXPECTED/notmuch-show-process-crypto-mime-parts-off OUTPUT
 
 test_begin_subtest "process cryptographic MIME parts"
 test_emacs '(let ((notmuch-crypto-process-mime t))
 	(notmuch-show "id:20091117203301.GV3165@dottiness.seas.harvard.edu")
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-process-crypto-mime-parts-on
+test_expect_equal_file $EXPECTED/notmuch-show-process-crypto-mime-parts-on OUTPUT
 
 test_begin_subtest "process cryptographic MIME parts (w/ notmuch-show-toggle-process-crypto)"
 test_emacs '(let ((notmuch-crypto-process-mime nil))
 	(notmuch-show "id:20091117203301.GV3165@dottiness.seas.harvard.edu")
 	(notmuch-show-toggle-process-crypto)
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-process-crypto-mime-parts-on
+test_expect_equal_file $EXPECTED/notmuch-show-process-crypto-mime-parts-on OUTPUT
 
 test_begin_subtest "notmuch-show: don't elide non-matching messages"
 test_emacs '(let ((notmuch-show-only-matching-messages nil))
@@ -67,7 +67,7 @@ test_emacs '(let ((notmuch-show-only-matching-messages nil))
 	(notmuch-search-show-thread)
 	(notmuch-test-wait)
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-elide-non-matching-messages-off
+test_expect_equal_file $EXPECTED/notmuch-show-elide-non-matching-messages-off OUTPUT
 
 test_begin_subtest "notmuch-show: elide non-matching messages"
 test_emacs '(let ((notmuch-show-only-matching-messages t))
@@ -76,7 +76,7 @@ test_emacs '(let ((notmuch-show-only-matching-messages t))
 	(notmuch-search-show-thread)
 	(notmuch-test-wait)
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-elide-non-matching-messages-on
+test_expect_equal_file $EXPECTED/notmuch-show-elide-non-matching-messages-on OUTPUT
 
 test_begin_subtest "notmuch-show: elide non-matching messages (w/ notmuch-show-toggle-elide-non-matching)"
 test_emacs '(let ((notmuch-show-only-matching-messages nil))
@@ -86,7 +86,7 @@ test_emacs '(let ((notmuch-show-only-matching-messages nil))
 	(notmuch-test-wait)
 	(notmuch-show-toggle-elide-non-matching)
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-elide-non-matching-messages-on
+test_expect_equal_file $EXPECTED/notmuch-show-elide-non-matching-messages-on OUTPUT
 
 test_begin_subtest "notmuch-show: elide non-matching messages (w/ prefix arg to notmuch-show)"
 test_emacs '(let ((notmuch-show-only-matching-messages nil))
@@ -95,7 +95,7 @@ test_emacs '(let ((notmuch-show-only-matching-messages nil))
 	(notmuch-search-show-thread t)
 	(notmuch-test-wait)
 	(test-visible-output))'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-elide-non-matching-messages-on
+test_expect_equal_file $EXPECTED/notmuch-show-elide-non-matching-messages-on OUTPUT
 
 test_begin_subtest "notmuch-show: disable indentation of thread content (w/ notmuch-show-toggle-thread-indentation)"
 test_emacs '(notmuch-search "from:lars@seas.harvard.edu and subject:\"Maildir storage\"")
@@ -104,7 +104,7 @@ test_emacs '(notmuch-search "from:lars@seas.harvard.edu and subject:\"Maildir st
 	(notmuch-test-wait)
 	(notmuch-show-toggle-thread-indentation)
 	(test-visible-output)'
-test_expect_equal_file OUTPUT $EXPECTED/notmuch-show-indent-thread-content-off
+test_expect_equal_file $EXPECTED/notmuch-show-indent-thread-content-off OUTPUT
 
 test_begin_subtest "id buttonization"
 add_message '[body]="
@@ -161,7 +161,7 @@ cid:xxx
 <<mid:abc>>. <<mid:abc>>, <<mid:abc>>;
 EOF
 notmuch_date_sanitize < OUTPUT.raw > OUTPUT
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 
 test_begin_subtest "Show handles subprocess errors"
@@ -191,12 +191,21 @@ This is an error (see *Notmuch errors* for more details)
 === ERROR ===
 [XXX]
 This is an error
-command: YYY/notmuch_fail show --format\\=sexp --format-version\\=1 --exclude\\=false \\' \\* \\'
+command: YYY/notmuch_fail show --format\\=sexp --format-version\\=4 --decrypt\\=true --exclude\\=false \\' \\* \\'
 exit status: 1
 stderr:
 This is an error
 stdout:
 This is output"
 
+test_begin_subtest "text/enriched exploit mitigation"
+add_message '[content-type]="text/enriched"
+             [body]="
+<x-display><param>(when (progn (read-only-mode -1) (insert ?p ?0 ?w ?n ?e ?d)) nil)</param>test</x-display>
+"'
+test_emacs '(notmuch-show "id:'$gen_msg_id'")
+	(test-visible-output "OUTPUT.raw")'
+output=$(head -1 OUTPUT.raw|cut -f1-4 -d' ')
+test_expect_equal "$output" "Notmuch Test Suite <test_suite@notmuchmail.org>"
 
 test_done

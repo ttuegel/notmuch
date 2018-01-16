@@ -1,3 +1,174 @@
+notmuch (0.26-1) unstable; urgency=medium
+
+  [ Daniel Kahn Gillmor ]
+  * build against python3-sphinx instead of python-sphinx
+  * d/changelog: strip trailing whitespace
+  * move to debhelper 10
+  * Standards-Version: bump to 4.1.3 (drop priority: extra
+    from transitional packages)
+
+  [ David Bremner ]
+  * New upstream release (see /usr/share/doc/notmuch/NEWS.gz)
+    - new command 'notmuch reindex'
+    - optional indexing of encrypted emails.
+    - indexing of files with duplicate message-id
+  * update symbols
+
+ -- David Bremner <bremner@debian.org>  Tue, 09 Jan 2018 07:13:21 -0400
+
+notmuch (0.26~rc2-1) experimental; urgency=medium
+
+  * Third upstream release candidate
+
+ -- David Bremner <bremner@debian.org>  Tue, 09 Jan 2018 07:13:11 -0400
+
+notmuch (0.26~rc1-1) experimental; urgency=medium
+
+  * Second upstream release candidate
+
+ -- David Bremner <bremner@debian.org>  Mon, 01 Jan 2018 21:17:39 -0400
+
+notmuch (0.26~rc0-1) experimental; urgency=medium
+
+  * Upstream release candidate
+
+ -- David Bremner <bremner@debian.org>  Thu, 28 Dec 2017 10:21:08 -0400
+
+notmuch (0.25.3-1) unstable; urgency=medium
+
+  * Upstream bugfix release. Fix for OpenPGP UID validity reporting,
+    and build failure with GMime 3.0.3+.
+  * Bug fix: "notmuch FTBFS on Alpha due to broken gdb", thanks to
+    Michael Cree (Closes: #881028).
+
+ -- David Bremner <bremner@debian.org>  Fri, 08 Dec 2017 21:08:00 -0400
+
+notmuch (0.25.2-1) unstable; urgency=medium
+
+  * New upstream bugfix release: fix for segfault when compiled
+    against gmime-2.6
+
+ -- David Bremner <bremner@debian.org>  Sun, 05 Nov 2017 20:05:49 -0400
+
+notmuch (0.25.1-1) unstable; urgency=medium
+
+  * new upstream bugfix release: mitigation for emacs bug 28350
+  * remove obsolete lintian override
+  * reformat debian/NEWS
+
+ -- David Bremner <bremner@debian.org>  Mon, 11 Sep 2017 22:20:48 -0300
+
+notmuch (0.25-6) unstable; urgency=medium
+
+  * Bug fix: "deletes shipped file on reinstall:
+    /etc/emacs/site-start.d/50notmuch.el", thanks to Andreas Beckmann
+    (Closes: #872197).
+
+ -- David Bremner <bremner@debian.org>  Tue, 15 Aug 2017 07:52:21 -0300
+
+notmuch (0.25-5) unstable; urgency=medium
+
+  * Bug fix: "dependency on elpa-emacs doesn't seem right", thanks
+    to Jiri Palecek (Closes: #871642).
+
+ -- David Bremner <bremner@debian.org>  Thu, 10 Aug 2017 06:42:50 -0400
+
+notmuch (0.25-4) unstable; urgency=medium
+
+  * Recommend elpa-emacs instead emacs-notmuch
+
+ -- David Bremner <bremner@debian.org>  Fri, 04 Aug 2017 18:11:35 -0400
+
+notmuch (0.25-3) unstable; urgency=medium
+
+  * Remove old startup file /etc/emacs/site-start.d/50notmuch.el
+
+ -- David Bremner <bremner@debian.org>  Thu, 03 Aug 2017 09:26:00 -0400
+
+notmuch (0.25-2) unstable; urgency=medium
+
+  * Drop build-dep on libgmime-2.4-dev, long unsupported upstream
+  * Bug fix: "please transition to gmime 3.0", thanks to Daniel Kahn
+    Gillmor (Closes: #867353).
+
+ -- David Bremner <bremner@debian.org>  Wed, 26 Jul 2017 10:59:14 -0400
+
+notmuch (0.25-1) unstable; urgency=medium
+
+  * New upstream release
+    - regexp search for mid, paths, tags
+    - drop inline images when indexing html
+
+ -- David Bremner <bremner@debian.org>  Tue, 25 Jul 2017 08:28:20 -0300
+
+notmuch (0.25~rc1-2) unstable; urgency=low
+
+  * upload to unstable
+
+ -- David Bremner <bremner@debian.org>  Tue, 18 Jul 2017 19:47:45 -0300
+
+notmuch (0.25~rc1-1) experimental; urgency=medium
+
+  * Bump standards version to 4.0.0 (no changes needed)
+  * New upstream release candidate
+
+ -- David Bremner <bremner@debian.org>  Tue, 18 Jul 2017 07:04:14 -0300
+
+notmuch (0.25~rc0-2) experimental; urgency=medium
+
+  * Fix compilation on 32 bit architectures (time_t vs. gint64)
+
+ -- David Bremner <bremner@debian.org>  Mon, 17 Jul 2017 08:49:32 -0300
+
+notmuch (0.25~rc0-1) experimental; urgency=medium
+
+  * New upstream release candidate
+  * Drop notmuch-dbg, use notmuch-dbgsym if debug symbols are needed.
+  * [lib] Bump SONAME to libnotmuch.so.5
+  * Bug fix: "doesn't check gpg/pgp signatures by default", thanks
+    to Vagrant Cascadian (Closes: #755544).
+  * Bug fix: "allow separation of command-line options and their
+    values: --option foo", thanks to Paul Wise (Closes: #825886).
+
+ -- David Bremner <bremner@debian.org>  Sun, 16 Jul 2017 08:48:59 -0300
+
+notmuch (0.24.2-2) unstable; urgency=medium
+
+  * rebuild for unstable
+
+ -- David Bremner <bremner@debian.org>  Sun, 02 Jul 2017 12:48:46 -0300
+
+notmuch (0.24.2-1) experimental; urgency=medium
+
+  * Fix dump output to not include tags when not asked for
+  * Fix file name stashing in emacs tree view.
+
+ -- David Bremner <bremner@debian.org>  Thu, 01 Jun 2017 07:24:55 -0300
+
+notmuch (0.24.1-1) experimental; urgency=medium
+
+  * Restore Xapian wildcard queries to from: and subject:
+  * Handle empty queries for from: and subject:
+  * Memory leaks in notmuch show fixed
+  * Fix bug notmuch dump header generation
+
+ -- David Bremner <bremner@debian.org>  Sat, 01 Apr 2017 09:17:47 -0300
+
+notmuch (0.24-1) experimental; urgency=medium
+
+  * New upstream release
+    - regexp search for from: and subject:
+    - Emacs interface improvements:
+      - draft handling
+      - don't automatically expand application/*
+      - jump (shortcut) menu for tagging.
+      - fold long headers when sending
+    - library improvements
+      - catch some stray DatabaseModifiedErrors
+      - make exclude handling non-destructive.
+
+ -- David Bremner <bremner@debian.org>  Sun, 12 Mar 2017 22:14:25 -0300
+
 notmuch (0.24~rc1-1) experimental; urgency=medium
 
   * New upstream release candidate
@@ -11,6 +182,18 @@ notmuch (0.24~rc0-1) experimental; urgency=medium
   * New upstream feature release (candidate).
 
  -- David Bremner <bremner@debian.org>  Sun, 05 Mar 2017 19:32:08 -0400
+
+notmuch (0.23.7-3) unstable; urgency=medium
+
+  * Cherry pick fixes to dump header from 0.24.1
+
+ -- David Bremner <bremner@debian.org>  Sat, 01 Apr 2017 21:09:36 -0300
+
+notmuch (0.23.7-2) unstable; urgency=medium
+
+  * Cherry pick 06adc276, fix use after free in libnotmuch4
+
+ -- David Bremner <bremner@debian.org>  Sun, 19 Mar 2017 09:38:17 -0300
 
 notmuch (0.23.7-1) unstable; urgency=medium
 
@@ -698,7 +881,7 @@ notmuch (0.9~rc2-1) experimental; urgency=low
     - New SONAME for libnotmuch
     - bindings changes for ruby and python
   * Less non-text parts reported in replies.
-  * emacs: provide button action to fetch unknown gpg keys 
+  * emacs: provide button action to fetch unknown gpg keys
 
  -- David Bremner <bremner@debian.org>  Fri, 07 Oct 2011 18:53:04 -0300
 
@@ -707,7 +890,7 @@ notmuch (0.9~rc1-1) experimental; urgency=low
   * Upstream release candidate
     - Atomicity improvements, thanks to Austin Clements
     - Add missing call to g_type_init, thanks to Aaron Ecay
-  * notmuch-emacs: add versioned dependency on notmuch.  
+  * notmuch-emacs: add versioned dependency on notmuch.
     (Closes: #642240).
 
  -- David Bremner <bremner@debian.org>  Sun, 25 Sep 2011 11:26:01 -0300
@@ -716,7 +899,7 @@ notmuch (0.8-1) unstable; urgency=low
 
   * New upstream version.
     - Improved handling of message/rfc822 parts
-    - Improved Build system portability 
+    - Improved Build system portability
     - Documentation update for Ruby bindings
     - Unicode, iterator, PEP8 changes for python bindings
 
@@ -798,7 +981,7 @@ notmuch (0.6~254) experimental; urgency=low
 
   [ Jameson Rollins ]
   * Bump standards version to 3.9.2 (No changes).
-  
+
  -- David Bremner <bremner@debian.org>  Thu, 23 Jun 2011 07:50:05 -0300
 
 notmuch (0.6~237) experimental; urgency=low
@@ -843,8 +1026,8 @@ notmuch (0.6~171) experimental; urgency=low
   * notmuch reply: Avoid segmentation fault when printing multiple parts
   * notmuch show: New part output handling.
   * emacs: Show cleaner `From:' addresses in the summary line.
-  * emacs: Add custom `notmuch-show-elide-same-subject', 
-    `notmuch-show-always-show-subject' 
+  * emacs: Add custom `notmuch-show-elide-same-subject',
+    `notmuch-show-always-show-subject'
   * emacs: Render text/x-vcalendar parts.
   * emacs: Add `notmuch-show-multipart/alternative-discouraged'.
   * vim: parse 'from' address, use sendmail directly, implement archive in
@@ -976,7 +1159,7 @@ notmuch (0.2) unstable; urgency=low
   * Fix headers to be properly decoded in "notmuch reply"
   * emacs: Show the last few lines of citations as well as the first few lines.
   * emacs: The '+' and '-' commands can now add and remove tags by region.
-  * emacs: More meaningful buffer names for thread-view buffers. 
+  * emacs: More meaningful buffer names for thread-view buffers.
   * emacs: Customized colors of threads in search view based on tags.
 
  -- Carl Worth <cworth@debian.org>  Fri, 16 Apr 2010 10:20:23 -0700

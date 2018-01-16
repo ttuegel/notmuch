@@ -25,47 +25,41 @@
 #include "sprinter.h"
 
 static void
-show_reply_headers (GMimeMessage *message)
+show_reply_headers (GMimeStream *stream, GMimeMessage *message)
 {
-    GMimeStream *stream_stdout = NULL;
-
-    stream_stdout = g_mime_stream_file_new (stdout);
-    if (stream_stdout) {
-	g_mime_stream_file_set_owner (GMIME_STREAM_FILE (stream_stdout), FALSE);
-	/* Output RFC 2822 formatted (and RFC 2047 encoded) headers. */
-	g_mime_object_write_to_stream (GMIME_OBJECT(message), stream_stdout);
-	g_object_unref(stream_stdout);
+    /* Output RFC 2822 formatted (and RFC 2047 encoded) headers. */
+    if (g_mime_object_write_to_stream (GMIME_OBJECT(message), stream) < 0) {
+	INTERNAL_ERROR("failed to write headers to stdout\n");
     }
 }
 
 static void
-format_part_reply (mime_node_t *node)
+format_part_reply (GMimeStream *stream, mime_node_t *node)
 {
     int i;
 
     if (node->envelope_file) {
-	printf ("On %s, %s wrote:\n",
-		notmuch_message_get_header (node->envelope_file, "date"),
-		notmuch_message_get_header (node->envelope_file, "from"));
+	g_mime_stream_printf (stream, "On %s, %s wrote:\n",
+			      notmuch_message_get_header (node->envelope_file, "date"),
+			      notmuch_message_get_header (node->envelope_file, "from"));
     } else if (GMIME_IS_MESSAGE (node->part)) {
 	GMimeMessage *message = GMIME_MESSAGE (node->part);
-	InternetAddressList *recipients;
-	const char *recipients_string;
+	char *recipients_string;
 
-	printf ("> From: %s\n", g_mime_message_get_sender (message));
-	recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_TO);
-	recipients_string = internet_address_list_to_string (recipients, 0);
+	g_mime_stream_printf (stream, "> From: %s\n", g_mime_message_get_from_string (message));
+	recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_TO);
 	if (recipients_string)
-	    printf ("> To: %s\n",
-		    recipients_string);
-	recipients = g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_CC);
-	recipients_string = internet_address_list_to_string (recipients, 0);
+	    g_mime_stream_printf (stream, "> To: %s\n",
+				  recipients_string);
+	g_free (recipients_string);
+	recipients_string = g_mime_message_get_address_string (message, GMIME_ADDRESS_TYPE_CC);
 	if (recipients_string)
-	    printf ("> Cc: %s\n",
-		    recipients_string);
-	printf ("> Subject: %s\n", g_mime_message_get_subject (message));
-	printf ("> Date: %s\n", g_mime_message_get_date_as_string (message));
-	printf (">\n");
+	    g_mime_stream_printf (stream, "> Cc: %s\n",
+				  recipients_string);
+	g_free (recipients_string);
+	g_mime_stream_printf (stream, "> Subject: %s\n", g_mime_message_get_subject (message));
+	g_mime_stream_printf (stream, "> Date: %s\n", g_mime_message_get_date_string (node, message));
+	g_mime_stream_printf (stream, ">\n");
     } else if (GMIME_IS_PART (node->part)) {
 	GMimeContentType *content_type = g_mime_object_get_content_type (node->part);
 	GMimeContentDisposition *disposition = g_mime_object_get_content_disposition (node->part);
@@ -75,24 +69,21 @@ format_part_reply (mime_node_t *node)
 	    /* Ignore PGP/MIME cruft parts */
 	} else if (g_mime_content_type_is_type (content_type, "text", "*") &&
 		   !g_mime_content_type_is_type (content_type, "text", "html")) {
-	    GMimeStream *stream_stdout = g_mime_stream_file_new (stdout);
-	    g_mime_stream_file_set_owner (GMIME_STREAM_FILE (stream_stdout), FALSE);
-	    show_text_part_content (node->part, stream_stdout, NOTMUCH_SHOW_TEXT_PART_REPLY);
-	    g_object_unref(stream_stdout);
+	    show_text_part_content (node->part, stream, NOTMUCH_SHOW_TEXT_PART_REPLY);
 	} else if (disposition &&
 		   strcasecmp (g_mime_content_disposition_get_disposition (disposition),
 			       GMIME_DISPOSITION_ATTACHMENT) == 0) {
 	    const char *filename = g_mime_part_get_filename (GMIME_PART (node->part));
-	    printf ("Attachment: %s (%s)\n", filename,
-		    g_mime_content_type_to_string (content_type));
+	    g_mime_stream_printf (stream, "Attachment: %s (%s)\n", filename,
+				  g_mime_content_type_to_string (content_type));
 	} else {
-	    printf ("Non-text part: %s\n",
-		    g_mime_content_type_to_string (content_type));
+	    g_mime_stream_printf (stream, "Non-text part: %s\n",
+				  g_mime_content_type_to_string (content_type));
 	}
     }
 
     for (i = 0; i < node->nchildren; i++)
-	format_part_reply (mime_node_child (node, i));
+	format_part_reply (stream, mime_node_child (node, i));
 }
 
 typedef enum {
@@ -102,7 +93,7 @@ typedef enum {
 } address_match_t;
 
 /* Match given string against given address according to mode. */
-static notmuch_bool_t
+static bool
 match_address (const char *str, const char *address, address_match_t mode)
 {
     switch (mode) {
@@ -114,7 +105,7 @@ match_address (const char *str, const char *address, address_match_t mode)
 	return strcasecmp (address, str) == 0;
     }
 
-    return FALSE;
+    return false;
 }
 
 /* Match given string against user's configured "primary" and "other"
@@ -162,7 +153,7 @@ string_in_user_address (const char *str, notmuch_config_t *config)
 
 /* Is the given address configured as one of the user's "primary" or
  * "other" addresses. */
-static notmuch_bool_t
+static bool
 address_is_users (const char *address, notmuch_config_t *config)
 {
     return address_match (address, config, STRING_IS_USER_ADDRESS) != NULL;
@@ -230,7 +221,7 @@ scan_address_list (InternetAddressList *list,
 /* Does the address in the Reply-To header of 'message' already appear
  * in either the 'To' or 'Cc' header of the message?
  */
-static notmuch_bool_t
+static bool
 reply_to_header_is_redundant (GMimeMessage *message,
 			      InternetAddressList *reply_to_list)
 {
@@ -238,7 +229,7 @@ reply_to_header_is_redundant (GMimeMessage *message,
     InternetAddress *address;
     InternetAddressMailbox *mailbox;
     InternetAddressList *recipients;
-    notmuch_bool_t ret = FALSE;
+    bool ret = false;
     int i;
 
     if (reply_to_list == NULL ||
@@ -262,7 +253,7 @@ reply_to_header_is_redundant (GMimeMessage *message,
 	mailbox = INTERNET_ADDRESS_MAILBOX (address);
 	addr = internet_address_mailbox_get_addr (mailbox);
 	if (strcmp (addr, reply_to) == 0) {
-	    ret = TRUE;
+	    ret = true;
 	    break;
 	}
     }
@@ -274,12 +265,11 @@ reply_to_header_is_redundant (GMimeMessage *message,
 
 static InternetAddressList *get_sender(GMimeMessage *message)
 {
-    const char *reply_to;
+    InternetAddressList *reply_to_list;
 
-    reply_to = g_mime_message_get_reply_to (message);
-    if (reply_to && *reply_to) {
-	InternetAddressList *reply_to_list;
-
+    reply_to_list = g_mime_message_get_reply_to_list (message);
+    if (reply_to_list &&
+	internet_address_list_length (reply_to_list) > 0) {
         /*
 	 * Some mailing lists munge the Reply-To header despite it
 	 * being A Bad Thing, see
@@ -293,30 +283,28 @@ static InternetAddressList *get_sender(GMimeMessage *message)
 	 * to the list. Note that the address in the Reply-To header
 	 * will always appear in the reply if reply_all is true.
 	 */
-	reply_to_list = internet_address_list_parse_string (reply_to);
 	if (! reply_to_header_is_redundant (message, reply_to_list))
 	    return reply_to_list;
 
-	g_object_unref (G_OBJECT (reply_to_list));
+	g_mime_2_6_unref (G_OBJECT (reply_to_list));
     }
 
-    return internet_address_list_parse_string (
-	g_mime_message_get_sender (message));
+    return g_mime_message_get_from (message);
 }
 
 static InternetAddressList *get_to(GMimeMessage *message)
 {
-    return g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_TO);
+    return g_mime_message_get_addresses (message, GMIME_ADDRESS_TYPE_TO);
 }
 
 static InternetAddressList *get_cc(GMimeMessage *message)
 {
-    return g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_CC);
+    return g_mime_message_get_addresses (message, GMIME_ADDRESS_TYPE_CC);
 }
 
 static InternetAddressList *get_bcc(GMimeMessage *message)
 {
-    return g_mime_message_get_recipients (message, GMIME_RECIPIENT_TYPE_BCC);
+    return g_mime_message_get_addresses (message, GMIME_ADDRESS_TYPE_BCC);
 }
 
 /* Augment the recipients of 'reply' from the "Reply-to:", "From:",
@@ -335,16 +323,22 @@ static const char *
 add_recipients_from_message (GMimeMessage *reply,
 			     notmuch_config_t *config,
 			     GMimeMessage *message,
-			     notmuch_bool_t reply_all)
+			     bool reply_all)
 {
+
+    /* There is a memory leak here with gmime-2.6 because get_sender
+     * returns a newly allocated list, while the others return
+     * references to libgmime owned data. This leak will be fixed with
+     * the transition to gmime-3.0.
+     */
     struct {
 	InternetAddressList * (*get_header)(GMimeMessage *message);
 	GMimeRecipientType recipient_type;
     } reply_to_map[] = {
-	{ get_sender,	GMIME_RECIPIENT_TYPE_TO },
-	{ get_to,	GMIME_RECIPIENT_TYPE_TO },
-	{ get_cc,	GMIME_RECIPIENT_TYPE_CC },
-	{ get_bcc,	GMIME_RECIPIENT_TYPE_BCC },
+	{ get_sender,	GMIME_ADDRESS_TYPE_TO },
+	{ get_to,	GMIME_ADDRESS_TYPE_TO },
+	{ get_cc,	GMIME_ADDRESS_TYPE_CC },
+	{ get_bcc,	GMIME_ADDRESS_TYPE_BCC },
     };
     const char *from_addr = NULL;
     unsigned int i;
@@ -528,8 +522,8 @@ create_reply_message(void *ctx,
 		     notmuch_config_t *config,
 		     notmuch_message_t *message,
 		     GMimeMessage *mime_message,
-		     notmuch_bool_t reply_all,
-		     notmuch_bool_t limited)
+		     bool reply_all,
+		     bool limited)
 {
     const char *subject, *from_addr = NULL;
     const char *in_reply_to, *orig_references, *references;
@@ -618,7 +612,7 @@ static int do_reply(notmuch_config_t *config,
 		    notmuch_query_t *query,
 		    notmuch_show_params_t *params,
 		    int format,
-		    notmuch_bool_t reply_all)
+		    bool reply_all)
 {
     GMimeMessage *reply;
     mime_node_t *node;
@@ -630,12 +624,12 @@ static int do_reply(notmuch_config_t *config,
     if (format == FORMAT_JSON || format == FORMAT_SEXP) {
 	unsigned count;
 
-	status = notmuch_query_count_messages_st (query, &count);
+	status = notmuch_query_count_messages (query, &count);
 	if (print_status_query ("notmuch reply", query, status))
 	    return 1;
 
 	if (count != 1) {
-	    fprintf (stderr, "Error: search term did not match precisely one message (matched %d messages).\n", count);
+	    fprintf (stderr, "Error: search term did not match precisely one message (matched %u messages).\n", count);
 	    return 1;
 	}
 
@@ -645,7 +639,7 @@ static int do_reply(notmuch_config_t *config,
 	    sp = sprinter_sexp_create (config, stdout);
     }
 
-    status = notmuch_query_search_messages_st (query, &messages);
+    status = notmuch_query_search_messages (query, &messages);
     if (print_status_query ("notmuch reply", query, status))
 	return 1;
 
@@ -669,18 +663,23 @@ static int do_reply(notmuch_config_t *config,
 
 	    /* The headers of the reply message we've created */
 	    sp->map_key (sp, "reply-headers");
-	    format_headers_sprinter (sp, reply, TRUE);
+	    format_headers_sprinter (sp, reply, true);
 
 	    /* Start the original */
 	    sp->map_key (sp, "original");
-	    format_part_sprinter (config, sp, node, TRUE, TRUE, FALSE);
+	    format_part_sprinter (config, sp, node, true, false);
 
 	    /* End */
 	    sp->end (sp);
 	} else {
-	    show_reply_headers (reply);
-	    if (format == FORMAT_DEFAULT)
-		format_part_reply (node);
+	    GMimeStream *stream_stdout = stream_stdout = g_mime_stream_stdout_new ();
+	    if (stream_stdout) {
+		show_reply_headers (stream_stdout, reply);
+		if (format == FORMAT_DEFAULT)
+		    format_part_reply (stream_stdout, node);
+	    }
+	    g_mime_stream_flush (stream_stdout);
+	    g_object_unref(stream_stdout);
 	}
 
 	g_object_unref (G_OBJECT (reply));
@@ -701,25 +700,31 @@ notmuch_reply_command (notmuch_config_t *config, int argc, char *argv[])
     int opt_index;
     notmuch_show_params_t params = {
 	.part = -1,
+	.crypto = { .decrypt = NOTMUCH_DECRYPT_AUTO },
     };
     int format = FORMAT_DEFAULT;
-    int reply_all = TRUE;
+    int reply_all = true;
 
     notmuch_opt_desc_t options[] = {
-	{ NOTMUCH_OPT_KEYWORD, &format, "format", 'f',
+	{ .opt_keyword = &format, .name = "format", .keywords =
 	  (notmuch_keyword_t []){ { "default", FORMAT_DEFAULT },
 				  { "json", FORMAT_JSON },
 				  { "sexp", FORMAT_SEXP },
 				  { "headers-only", FORMAT_HEADERS_ONLY },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_INT, &notmuch_format_version, "format-version", 0, 0 },
-	{ NOTMUCH_OPT_KEYWORD, &reply_all, "reply-to", 'r',
-	  (notmuch_keyword_t []){ { "all", TRUE },
-				  { "sender", FALSE },
+	{ .opt_int = &notmuch_format_version, .name = "format-version" },
+	{ .opt_keyword = &reply_all, .name = "reply-to", .keywords =
+	  (notmuch_keyword_t []){ { "all", true },
+				  { "sender", false },
 				  { 0, 0 } } },
-	{ NOTMUCH_OPT_BOOLEAN, &params.crypto.decrypt, "decrypt", 'd', 0 },
-	{ NOTMUCH_OPT_INHERIT, (void *) &notmuch_shared_options, NULL, 0, 0 },
-	{ 0, 0, 0, 0, 0 }
+	{ .opt_keyword = (int*)(&params.crypto.decrypt), .name = "decrypt",
+	  .keyword_no_arg_value = "true", .keywords =
+	  (notmuch_keyword_t []){ { "false", NOTMUCH_DECRYPT_FALSE },
+				  { "auto", NOTMUCH_DECRYPT_AUTO },
+				  { "true", NOTMUCH_DECRYPT_NOSTASH },
+				  { 0, 0 } } },
+	{ .opt_inherit = notmuch_shared_options },
+	{ }
     };
 
     opt_index = parse_arguments (argc, argv, options, 1);
@@ -741,7 +746,9 @@ notmuch_reply_command (notmuch_config_t *config, int argc, char *argv[])
 	return EXIT_FAILURE;
     }
 
+#if (GMIME_MAJOR_VERSION < 3)
     params.crypto.gpgpath = notmuch_config_get_crypto_gpg_path (config);
+#endif
 
     if (notmuch_database_open (notmuch_config_get_database_path (config),
 			       NOTMUCH_DATABASE_MODE_READ_ONLY, &notmuch))
@@ -758,7 +765,7 @@ notmuch_reply_command (notmuch_config_t *config, int argc, char *argv[])
     if (do_reply (config, query, &params, format, reply_all) != 0)
 	return EXIT_FAILURE;
 
-    notmuch_crypto_cleanup (&params.crypto);
+    _notmuch_crypto_cleanup (&params.crypto);
     notmuch_query_destroy (query);
     notmuch_database_destroy (notmuch);
 

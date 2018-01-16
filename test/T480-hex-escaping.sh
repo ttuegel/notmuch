@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 test_description="hex encoding and decoding"
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
 test_begin_subtest "round trip"
-find $TEST_DIRECTORY/corpus -type f -print | sort | xargs cat > EXPECTED
+find $NOTMUCH_SRCDIR/test/corpora/default -type f -print | sort | xargs cat > EXPECTED
 $TEST_DIRECTORY/hex-xcode --direction=encode < EXPECTED | $TEST_DIRECTORY/hex-xcode --direction=decode > OUTPUT
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "punctuation"
 tag1='comic_swear=$&^%$^%\\//-+$^%$'
@@ -25,10 +25,10 @@ $TEST_DIRECTORY/hex-xcode --direction=decode  < EXPECTED.$test_count |\
 test_expect_equal_file EXPECTED.$test_count OUTPUT.$test_count
 
 test_begin_subtest "round trip (in-place)"
-find $TEST_DIRECTORY/corpus -type f -print | sort | xargs cat > EXPECTED
+find $NOTMUCH_SRCDIR/test/corpora/default -type f -print | sort | xargs cat > EXPECTED
 $TEST_DIRECTORY/hex-xcode --in-place --direction=encode < EXPECTED |\
      $TEST_DIRECTORY/hex-xcode --in-place --direction=decode > OUTPUT
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "punctuation (in-place)"
 tag1='comic_swear=$&^%$^%\\//-+$^%$'

@@ -26,12 +26,23 @@ that you know if you break anything.
   - gpg(1)
   - python(1)
 
-If your system lacks these tools or have older, non-upgreable versions
+If your system lacks these tools or have older, non-upgradable versions
 of these, please (possibly compile and) install these to some other
 path, for example /usr/local/bin or /opt/gnu/bin. Then prepend the
 chosen directory to your PATH before running the tests.
 
 e.g. env PATH=/opt/gnu/bin:$PATH make test
+
+For FreeBSD you need to install latest gdb from ports or packages and
+provide path to it in TEST_GDB environment variable before executing
+the tests, native FreeBSD gdb does not not work.  If you install
+coreutils, which provides GNU versions of basic utils like 'date' and
+'base64' on FreeBSD, the test suite will use these instead of the
+native ones. This provides robustness against portability issues with
+these system tools. Most often the tests are written, reviewed and
+tested on Linux system so such portability issues arise from time to
+time.
+
 
 Running Tests
 -------------
@@ -68,15 +79,6 @@ The following command-line options are available when running tests:
 	write it to files named 't/test-results/$TEST_NAME.out'.
 	As the names depend on the tests' file names, it is safe to
 	run the tests with this option in parallel.
-
---root=<dir>::
-	This runs the testsuites specified under a separate directory.
-	However, caution is advised, as not all tests are maintained
-	with this relocation in mind, so some tests may behave
-	differently.
-
-	Pointing this argument at a tmpfs filesystem can improve the
-	speed of the test suite for some users.
 
 Certain tests require precomputed databases to complete. You can fetch these
 databases with
@@ -133,9 +135,9 @@ remaining tests to be unaffected.
 
 Currently we do not consider skipped tests as build failures. For
 maximum robustness, when setting up automated build processes, you
-should explicitely skip tests, rather than relying on notmuch's
+should explicitly skip tests, rather than relying on notmuch's
 detection of missing prerequisites. In the future we may treat tests
-unable to run because of missing prerequisites, but not explicitely
+unable to run because of missing prerequisites, but not explicitly
 skipped by the user, as failures.
 
 Writing Tests

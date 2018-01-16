@@ -598,6 +598,8 @@ message will be \"unarchived\", i.e. the tag changes in
 (defun notmuch-tree-refresh-view ()
   "Refresh view."
   (interactive)
+  (when (get-buffer-process (current-buffer))
+    (error "notmuch tree process already running for current buffer"))
   (let ((inhibit-read-only t)
 	(basic-query notmuch-tree-basic-query)
 	(query-context notmuch-tree-query-context)
@@ -832,7 +834,7 @@ passed to it by notmuch-tree-process-filter."
   (mapc 'notmuch-tree-insert-forest-thread forest))
 
 (define-derived-mode notmuch-tree-mode fundamental-mode "notmuch-tree"
-  "Major mode displaying messages (as opposed to threads) of of a notmuch search.
+  "Major mode displaying messages (as opposed to threads) of a notmuch search.
 
 This buffer contains the results of a \"notmuch tree\" of your
 email archives. Each line in the buffer represents a single
@@ -897,7 +899,9 @@ the same as for the function notmuch-tree."
   (notmuch-tree-mode)
   (add-hook 'post-command-hook #'notmuch-tree-command-hook t t)
   (setq notmuch-tree-basic-query basic-query)
-  (setq notmuch-tree-query-context query-context)
+  (setq notmuch-tree-query-context (if (or (string= query-context "")
+					   (string= query-context "*"))
+				       nil query-context))
   (setq notmuch-tree-target-msg target)
   (setq notmuch-tree-open-target open-target)
   ;; Set the default value for `notmuch-show-process-crypto' in this
@@ -917,7 +921,7 @@ the same as for the function notmuch-tree."
     (notmuch-tag-clear-cache)
     (let ((proc (notmuch-start-notmuch
 		 "notmuch-tree" (current-buffer) #'notmuch-tree-process-sentinel
-		 "show" "--body=false" "--format=sexp"
+		 "show" "--body=false" "--format=sexp" "--format-version=4"
 		 message-arg search-args))
 	  ;; Use a scratch buffer to accumulate partial output.
 	  ;; This buffer will be killed by the sentinel, which

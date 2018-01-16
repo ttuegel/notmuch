@@ -49,7 +49,20 @@
 ;; Have fun, and let us know if you have any comment, questions, or
 ;; kudos: Notmuch list <notmuch@notmuchmail.org> (subscription is not
 ;; required, but is available from https://notmuchmail.org).
-
+;;
+;; Note for MELPA users (and others tracking the development version
+;; of notmuch-emacs):
+;;
+;; This emacs package needs a fairly closely matched version of the
+;; notmuch program. If you use the MELPA version of notmuch.el (as
+;; opposed to MELPA stable), you should be prepared to track the
+;; master development branch (i.e. build from git) for the notmuch
+;; program as well. Upgrading notmuch-emacs too far beyond the notmuch
+;; program can CAUSE YOUR EMAIL TO STOP WORKING.
+;;
+;; TL;DR: notmuch-emacs from MELPA and notmuch from distro packages is
+;; NOT SUPPORTED.
+;;
 ;;; Code:
 
 (eval-when-compile (require 'cl))
@@ -374,7 +387,11 @@ Complete list of currently available key bindings:
   (set (make-local-variable 'scroll-preserve-screen-position) t)
   (add-to-invisibility-spec (cons 'ellipsis t))
   (setq truncate-lines t)
-  (setq buffer-read-only t))
+  (setq buffer-read-only t)
+  (setq imenu-prev-index-position-function
+        #'notmuch-search-imenu-prev-index-position-function)
+  (setq imenu-extract-index-name-function
+        #'notmuch-search-imenu-extract-index-name-function))
 
 (defun notmuch-search-get-result (&optional pos)
   "Return the result object for the thread at POS (or point).
@@ -402,17 +419,17 @@ returns nil"
     (next-single-property-change (or pos (point)) 'notmuch-search-result
 				 nil (point-max))))
 
-(defun notmuch-search-foreach-result (beg end function)
-  "Invoke FUNCTION for each result between BEG and END.
+(defun notmuch-search-foreach-result (beg end fn)
+  "Invoke FN for each result between BEG and END.
 
-FUNCTION should take one argument.  It will be applied to the
+FN should take one argument.  It will be applied to the
 character position of the beginning of each result that overlaps
 the region between points BEG and END.  As a special case, if (=
-BEG END), FUNCTION will be applied to the result containing point
+BEG END), FN will be applied to the result containing point
 BEG."
 
   (lexical-let ((pos (notmuch-search-result-beginning beg))
-		;; End must be a marker in case function changes the
+		;; End must be a marker in case fn changes the
 		;; text.
 		(end (copy-marker end))
 		;; Make sure we examine at least one result, even if
@@ -423,7 +440,7 @@ BEG."
     ;; pos.
     (while (and pos (or (< pos end) first))
       (when (notmuch-search-get-result pos)
-	(funcall function pos))
+	(funcall fn pos))
       (setq pos (notmuch-search-result-end pos)
 	    first nil))))
 ;; Unindent the function argument of notmuch-search-foreach-result so
@@ -990,7 +1007,7 @@ the configured default sort order."
       (save-excursion
 	(let ((proc (notmuch-start-notmuch
 		     "notmuch-search" buffer #'notmuch-search-process-sentinel
-		     "search" "--format=sexp" "--format-version=2"
+		     "search" "--format=sexp" "--format-version=4"
 		     (if oldest-first
 			 "--sort=oldest-first"
 		       "--sort=newest-first")
@@ -1094,8 +1111,8 @@ notmuch buffers exist, run `notmuch'."
 
     ;; Find the first notmuch buffer.
     (setq first (loop for buffer in (buffer-list)
-		     if (notmuch-interesting-buffer buffer)
-		     return buffer))
+		      if (notmuch-interesting-buffer buffer)
+		      return buffer))
 
     (if first
 	;; If the first one we found is any other than the starting
@@ -1103,6 +1120,23 @@ notmuch buffers exist, run `notmuch'."
 	(unless (eq first start)
 	  (switch-to-buffer first))
       (notmuch))))
+
+;;;; Imenu Support
+
+(defun notmuch-search-imenu-prev-index-position-function ()
+  "Move point to previous message in notmuch-search buffer.
+This function is used as a value for
+`imenu-prev-index-position-function'."
+  (notmuch-search-previous-thread))
+
+(defun notmuch-search-imenu-extract-index-name-function ()
+  "Return imenu name for line at point.
+This function is used as a value for
+`imenu-extract-index-name-function'.  Point should be at the
+beginning of the line."
+  (let ((subject (notmuch-search-find-subject))
+	(author (notmuch-search-find-authors)))
+    (format "%s (%s)" subject author)))
 
 (setq mail-user-agent 'notmuch-user-agent)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 test_description='"notmuch search" in several variations'
-. ./test-lib.sh || exit 1
+. $(dirname "$0")/test-lib.sh || exit 1
 
 add_email_corpus
 
@@ -111,7 +111,7 @@ thread:XXX   2009-11-18 [3/3] Adrian Perez de Castro, Keith Packard, Carl Worth;
 thread:XXX   2009-11-18 [3/3] Israel Herraiz, Keith Packard, Carl Worth; [notmuch] New to the list (inbox unread)
 thread:XXX   2009-11-18 [3/3] Jan Janak, Carl Worth; [notmuch] What a great idea! (inbox unread)
 thread:XXX   2009-11-18 [2/2] Jan Janak, Carl Worth; [notmuch] [PATCH] Older versions of install do not support -C. (inbox unread)
-thread:XXX   2009-11-18 [3/3] Aron Griffis, Keith Packard, Carl Worth; [notmuch] archive (inbox unread)
+thread:XXX   2009-11-18 [3/3(4)] Aron Griffis, Keith Packard, Carl Worth; [notmuch] archive (inbox unread)
 thread:XXX   2009-11-18 [2/2] Keith Packard, Carl Worth; [notmuch] [PATCH] Make notmuch-show 'X' (and 'x') commands remove inbox (and unread) tags (inbox unread)
 thread:XXX   2009-11-18 [7/7] Lars Kellogg-Stedman, Mikhail Gusarov, Keith Packard, Carl Worth; [notmuch] Working with Maildir storage? (inbox signed unread)
 thread:XXX   2009-11-18 [5/5] Mikhail Gusarov, Carl Worth, Keith Packard; [notmuch] [PATCH 1/2] Close message file after parsing message headers (inbox unread)
@@ -144,7 +144,7 @@ thread:XXX   2000-01-01 [1/1] Notmuch Test Suite; search by to (name) (inbox unr
 thread:XXX   2000-01-01 [1/1] Notmuch Test Suite; subject search test (phrase) (inbox unread)
 thread:XXX   2000-01-01 [1/1] Notmuch Test Suite; this phrase should not match the subject search test (inbox unread)
 EOF
-test_expect_equal_file OUTPUT EXPECTED
+test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "Search body (utf-8):"
 add_message '[subject]="utf8-message-body-subject"' '[date]="Sat, 01 Jan 2000 12:00:00 -0000"' '[body]="message body utf8: bödý"'

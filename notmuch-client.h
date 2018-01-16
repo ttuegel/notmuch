@@ -24,16 +24,13 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE /* for getline */
 #endif
+#include <stdbool.h>
 #include <stdio.h>
 #include <sysexits.h>
 
 #include "compat.h"
 
-#include <gmime/gmime.h>
-
-typedef GMimeCryptoContext notmuch_crypto_context_t;
-/* This is automatically included only since gmime 2.6.10 */
-#include <gmime/gmime-pkcs7-context.h>
+#include "gmime-extra.h"
 
 #include "notmuch.h"
 
@@ -54,6 +51,7 @@ typedef GMimeCryptoContext notmuch_crypto_context_t;
 #include <ctype.h>
 
 #include "talloc-extra.h"
+#include "crypto.h"
 
 #define unused(x) x __attribute__ ((unused))
 
@@ -71,21 +69,14 @@ typedef struct notmuch_show_format {
 			      const struct notmuch_show_params *params);
 } notmuch_show_format_t;
 
-typedef struct notmuch_crypto {
-    notmuch_crypto_context_t* gpgctx;
-    notmuch_crypto_context_t* pkcs7ctx;
-    notmuch_bool_t verify;
-    notmuch_bool_t decrypt;
-    const char *gpgpath;
-} notmuch_crypto_t;
-
 typedef struct notmuch_show_params {
-    notmuch_bool_t entire_thread;
-    notmuch_bool_t omit_excluded;
-    notmuch_bool_t output_body;
+    bool entire_thread;
+    bool omit_excluded;
+    bool output_body;
     int part;
-    notmuch_crypto_t crypto;
-    notmuch_bool_t include_html;
+    _notmuch_crypto_t crypto;
+    bool include_html;
+    GMimeStream *out_stream;
 } notmuch_show_params_t;
 
 /* There's no point in continuing when we've detected that we've done
@@ -144,7 +135,7 @@ chomp_newline (char *str)
  * this.  New (required) map fields can be added without increasing
  * this.
  */
-#define NOTMUCH_FORMAT_CUR 3
+#define NOTMUCH_FORMAT_CUR 4
 /* The minimum supported structured output format version.  Requests
  * for format versions below this will return an error. */
 #define NOTMUCH_FORMAT_MIN 1
@@ -177,12 +168,6 @@ typedef struct _notmuch_config notmuch_config_t;
 void
 notmuch_exit_if_unsupported_format (void);
 
-notmuch_crypto_context_t *
-notmuch_crypto_get_context (notmuch_crypto_t *crypto, const char *protocol);
-
-int
-notmuch_crypto_cleanup (notmuch_crypto_t *crypto);
-
 int
 notmuch_count_command (notmuch_config_t *config, int argc, char *argv[]);
 
@@ -194,6 +179,9 @@ notmuch_new_command (notmuch_config_t *config, int argc, char *argv[]);
 
 int
 notmuch_insert_command (notmuch_config_t *config, int argc, char *argv[]);
+
+int
+notmuch_reindex_command (notmuch_config_t *config, int argc, char *argv[]);
 
 int
 notmuch_reply_command (notmuch_config_t *config, int argc, char *argv[]);
@@ -239,12 +227,12 @@ show_one_part (const char *filename, int part);
 
 void
 format_part_sprinter (const void *ctx, struct sprinter *sp, mime_node_t *node,
-		      notmuch_bool_t first, notmuch_bool_t output_body,
-		      notmuch_bool_t include_html);
+		      bool output_body,
+		      bool include_html);
 
 void
 format_headers_sprinter (struct sprinter *sp, GMimeMessage *message,
-			 notmuch_bool_t reply);
+			 bool reply);
 
 typedef enum {
     NOTMUCH_SHOW_TEXT_PART_REPLY = 1 << 0,
@@ -278,7 +266,7 @@ notmuch_config_close (notmuch_config_t *config);
 int
 notmuch_config_save (notmuch_config_t *config);
 
-notmuch_bool_t
+bool
 notmuch_config_is_new (notmuch_config_t *config);
 
 const char *
@@ -288,12 +276,14 @@ void
 notmuch_config_set_database_path (notmuch_config_t *config,
 				  const char *database_path);
 
+#if (GMIME_MAJOR_VERSION < 3)
 const char *
 notmuch_config_get_crypto_gpg_path (notmuch_config_t *config);
 
 void
 notmuch_config_set_crypto_gpg_path (notmuch_config_t *config,
 				  const char *gpg_path);
+#endif
 
 const char *
 notmuch_config_get_user_name (notmuch_config_t *config);
@@ -335,12 +325,12 @@ notmuch_config_set_new_ignore (notmuch_config_t *config,
 			       const char *new_ignore[],
 			       size_t length);
 
-notmuch_bool_t
+bool
 notmuch_config_get_maildir_synchronize_flags (notmuch_config_t *config);
 
 void
 notmuch_config_set_maildir_synchronize_flags (notmuch_config_t *config,
-					      notmuch_bool_t synchronize_flags);
+					      bool synchronize_flags);
 
 const char **
 notmuch_config_get_search_exclude_tags (notmuch_config_t *config, size_t *length);
@@ -353,7 +343,7 @@ notmuch_config_set_search_exclude_tags (notmuch_config_t *config,
 int
 notmuch_run_hook (const char *db_path, const char *hook);
 
-notmuch_bool_t
+bool
 debugger_is_active (void);
 
 /* mime-node.c */
@@ -396,14 +386,14 @@ struct mime_node {
     int part_num;
 
     /* True if decryption of this part was attempted. */
-    notmuch_bool_t decrypt_attempted;
+    bool decrypt_attempted;
     /* True if decryption of this part's child succeeded.  In this
      * case, the decrypted part is substituted for the second child of
      * this part (which would usually be the encrypted data). */
-    notmuch_bool_t decrypt_success;
+    bool decrypt_success;
 
     /* True if signature verification on this part was attempted. */
-    notmuch_bool_t verify_attempted;
+    bool verify_attempted;
 
     /* The list of signatures for signed or encrypted containers. If
      * there are no signatures, this will be NULL. */
@@ -424,9 +414,12 @@ struct mime_node {
 
 /* Construct a new MIME node pointing to the root message part of
  * message. If crypto->verify is true, signed child parts will be
- * verified. If crypto->decrypt is true, encrypted child parts will be
- * decrypted.  If the crypto contexts (crypto->gpgctx or
- * crypto->pkcs7) are NULL, they will be lazily initialized.
+ * verified. If crypto->decrypt is NOTMUCH_DECRYPT_TRUE, encrypted
+ * child parts will be decrypted using either stored session keys or
+ * asymmetric crypto.  If crypto->decrypt is NOTMUCH_DECRYPT_AUTO,
+ * only session keys will be tried.  If the crypto contexts
+ * (crypto->gpgctx or crypto->pkcs7) are NULL, they will be lazily
+ * initialized.
  *
  * Return value:
  *
@@ -438,7 +431,7 @@ struct mime_node {
  */
 notmuch_status_t
 mime_node_open (const void *ctx, notmuch_message_t *message,
-		notmuch_crypto_t *crypto, mime_node_t **node_out);
+		_notmuch_crypto_t *crypto, mime_node_t **node_out);
 
 /* Return a new MIME node for the requested child part of parent.
  * parent will be used as the talloc context for the returned child
@@ -469,7 +462,7 @@ typedef enum dump_includes {
 
 #define DUMP_INCLUDE_DEFAULT (DUMP_INCLUDE_TAGS | DUMP_INCLUDE_CONFIG | DUMP_INCLUDE_PROPERTIES)
 
-#define NOTMUCH_DUMP_VERSION 2
+#define NOTMUCH_DUMP_VERSION 3
 
 int
 notmuch_database_dump (notmuch_database_t *notmuch,
@@ -477,7 +470,7 @@ notmuch_database_dump (notmuch_database_t *notmuch,
 		       const char *query_str,
 		       dump_format_t output_format,
 		       dump_include_t include,
-		       notmuch_bool_t gzip_output);
+		       bool gzip_output);
 
 /* If status is non-zero (i.e. error) print appropriate
    messages to stderr.
@@ -498,11 +491,25 @@ status_to_exit (notmuch_status_t status);
 
 #include "command-line-arguments.h"
 
-extern char *notmuch_requested_db_uuid;
+extern const char *notmuch_requested_db_uuid;
 extern const notmuch_opt_desc_t  notmuch_shared_options [];
 void notmuch_exit_if_unmatched_db_uuid (notmuch_database_t *notmuch);
 
 void notmuch_process_shared_options (const char* subcommand_name);
 int notmuch_minimal_options (const char* subcommand_name,
 			     int argc, char **argv);
+
+
+/* the state chosen by the user invoking one of the notmuch
+ * subcommands that does indexing */
+struct _notmuch_client_indexing_cli_choices {
+    int decrypt_policy;
+    bool decrypt_policy_set;
+    notmuch_indexopts_t * opts;
+};
+extern struct _notmuch_client_indexing_cli_choices indexing_cli_choices;
+extern const notmuch_opt_desc_t  notmuch_shared_indexing_options [];
+notmuch_status_t
+notmuch_process_shared_indexing_options (notmuch_database_t *notmuch, notmuch_config_t *config);
+
 #endif

@@ -29,7 +29,7 @@ struct _notmuch_query {
     notmuch_sort_t sort;
     notmuch_string_list_t *exclude_terms;
     notmuch_exclude_t omit_excluded;
-    notmuch_bool_t parsed;
+    bool parsed;
     Xapian::Query xapian_query;
     std::set<std::string> terms;
 };
@@ -49,7 +49,7 @@ struct _notmuch_doc_id_set {
 #define DOCIDSET_WORD(bit) ((bit) / CHAR_BIT)
 #define DOCIDSET_BIT(bit) ((bit) % CHAR_BIT)
 
-struct visible _notmuch_threads {
+struct _notmuch_threads {
     notmuch_query_t *query;
 
     /* The ordered list of doc ids matched by the query. */
@@ -62,12 +62,12 @@ struct visible _notmuch_threads {
 };
 
 /* We need this in the message functions so forward declare. */
-static notmuch_bool_t
+static bool
 _notmuch_doc_id_set_init (void *ctx,
 			  notmuch_doc_id_set_t *doc_ids,
 			  GArray *arr);
 
-static notmuch_bool_t
+static bool
 _debug_query (void)
 {
     char *env = getenv ("NOTMUCH_DEBUG_QUERY");
@@ -97,7 +97,7 @@ notmuch_query_create (notmuch_database_t *notmuch,
 
     new (&query->xapian_query) Xapian::Query ();
     new (&query->terms) std::set<std::string> ();
-    query->parsed = FALSE;
+    query->parsed = false;
 
     talloc_set_destructor (query, _notmuch_query_destructor);
 
@@ -134,7 +134,7 @@ _notmuch_query_ensure_parsed (notmuch_query_t *query)
 	     t != query->xapian_query.get_terms_end (); ++t)
 	    query->terms.insert (*t);
 
-	query->parsed = TRUE;
+	query->parsed = true;
 
     } catch (const Xapian::Error &error) {
 	if (!query->notmuch->exception_reported) {
@@ -144,7 +144,7 @@ _notmuch_query_ensure_parsed (notmuch_query_t *query)
 	    _notmuch_database_log_append (query->notmuch,
 					  "Query string was: %s\n",
 					  query->query_string);
-	    query->notmuch->exception_reported = TRUE;
+	    query->notmuch->exception_reported = true;
 	}
 
 	return NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -177,29 +177,22 @@ notmuch_query_get_sort (const notmuch_query_t *query)
     return query->sort;
 }
 
-void
+notmuch_status_t
 notmuch_query_add_tag_exclude (notmuch_query_t *query, const char *tag)
 {
     notmuch_status_t status;
     char *term;
 
     status = _notmuch_query_ensure_parsed (query);
-    /* The following is not ideal error handling, but to avoid
-     * breaking the ABI, we can live with it for now. In particular at
-     * least in the notmuch CLI, any syntax error in the query is
-     * caught in a later call to _notmuch_query_ensure_parsed with a
-     * better error path.
-     *
-     * TODO: add status return to this function.
-     */
     if (status)
-	return;
+	return status;
 
     term = talloc_asprintf (query, "%s%s", _find_prefix ("tag"), tag);
     if (query->terms.count(term) != 0)
-	return; /* XXX report ignoring exclude? */
+	return NOTMUCH_STATUS_IGNORED;
 
     _notmuch_string_list_append (query->exclude_terms, term);
+    return NOTMUCH_STATUS_SUCCESS;
 }
 
 /* We end up having to call the destructors explicitly because we had
@@ -233,20 +226,16 @@ _notmuch_exclude_tags (notmuch_query_t *query)
     return exclude_query;
 }
 
-notmuch_messages_t *
-notmuch_query_search_messages (notmuch_query_t *query)
-{
-    notmuch_status_t status;
-    notmuch_messages_t *messages;
-    status = notmuch_query_search_messages_st (query, &messages);
-    if (status)
-	return NULL;
-    else
-	return messages;
-}
 
 notmuch_status_t
 notmuch_query_search_messages_st (notmuch_query_t *query,
+				  notmuch_messages_t **out)
+{
+    return notmuch_query_search_messages (query, out);
+}
+
+notmuch_status_t
+notmuch_query_search_messages (notmuch_query_t *query,
 				  notmuch_messages_t **out)
 {
     return _notmuch_query_search_documents (query, "mail", out);
@@ -272,7 +261,7 @@ _notmuch_query_search_documents (notmuch_query_t *query,
 
     try {
 
-	messages->base.is_of_list_type = FALSE;
+	messages->base.is_of_list_type = false;
 	messages->base.iterator = NULL;
 	messages->notmuch = notmuch;
 	new (&messages->iterator) Xapian::MSetIterator ();
@@ -315,7 +304,7 @@ _notmuch_query_search_documents (notmuch_query_t *query,
 
 		mset = enquire.get_mset (0, notmuch->xapian_db->get_doccount ());
 
-		GArray *excluded_doc_ids = g_array_new (FALSE, FALSE, sizeof (unsigned int));
+		GArray *excluded_doc_ids = g_array_new (false, false, sizeof (unsigned int));
 
 		for (iterator = mset.begin (); iterator != mset.end (); iterator++) {
 		    unsigned int doc_id = *iterator;
@@ -333,13 +322,13 @@ _notmuch_query_search_documents (notmuch_query_t *query,
 
 	switch (query->sort) {
 	case NOTMUCH_SORT_OLDEST_FIRST:
-	    enquire.set_sort_by_value (NOTMUCH_VALUE_TIMESTAMP, FALSE);
+	    enquire.set_sort_by_value (NOTMUCH_VALUE_TIMESTAMP, false);
 	    break;
 	case NOTMUCH_SORT_NEWEST_FIRST:
-	    enquire.set_sort_by_value (NOTMUCH_VALUE_TIMESTAMP, TRUE);
+	    enquire.set_sort_by_value (NOTMUCH_VALUE_TIMESTAMP, true);
 	    break;
 	case NOTMUCH_SORT_MESSAGE_ID:
-	    enquire.set_sort_by_value (NOTMUCH_VALUE_MESSAGE_ID, FALSE);
+	    enquire.set_sort_by_value (NOTMUCH_VALUE_MESSAGE_ID, false);
 	    break;
 	case NOTMUCH_SORT_UNSORTED:
 	    break;
@@ -370,13 +359,13 @@ _notmuch_query_search_documents (notmuch_query_t *query,
 			       "Query string was: %s\n",
 			       query->query_string);
 
-	notmuch->exception_reported = TRUE;
+	notmuch->exception_reported = true;
 	talloc_free (messages);
 	return NOTMUCH_STATUS_XAPIAN_EXCEPTION;
     }
 }
 
-notmuch_bool_t
+bool
 _notmuch_mset_messages_valid (notmuch_messages_t *messages)
 {
     notmuch_mset_messages_t *mset_messages;
@@ -426,7 +415,7 @@ _notmuch_mset_messages_get (notmuch_messages_t *messages)
 
     if (messages->excluded_doc_ids &&
 	_notmuch_doc_id_set_contains (messages->excluded_doc_ids, doc_id))
-	notmuch_message_set_flag (message, NOTMUCH_MESSAGE_FLAG_EXCLUDED, TRUE);
+	notmuch_message_set_flag (message, NOTMUCH_MESSAGE_FLAG_EXCLUDED, true);
 
     return message;
 }
@@ -441,7 +430,7 @@ _notmuch_mset_messages_move_to_next (notmuch_messages_t *messages)
     mset_messages->iterator++;
 }
 
-static notmuch_bool_t
+static bool
 _notmuch_doc_id_set_init (void *ctx,
 			  notmuch_doc_id_set_t *doc_ids,
 			  GArray *arr)
@@ -454,7 +443,7 @@ _notmuch_doc_id_set_init (void *ctx,
     bitmap = talloc_zero_array (ctx, unsigned char, DOCIDSET_WORD(max) + 1);
 
     if (bitmap == NULL)
-	return FALSE;
+	return false;
 
     doc_ids->bitmap = bitmap;
     doc_ids->bound = max + 1;
@@ -464,15 +453,15 @@ _notmuch_doc_id_set_init (void *ctx,
 	bitmap[DOCIDSET_WORD(doc_id)] |= 1 << DOCIDSET_BIT(doc_id);
     }
 
-    return TRUE;
+    return true;
 }
 
-notmuch_bool_t
+bool
 _notmuch_doc_id_set_contains (notmuch_doc_id_set_t *doc_ids,
 			      unsigned int doc_id)
 {
     if (doc_id >= doc_ids->bound)
-	return FALSE;
+	return false;
     return doc_ids->bitmap[DOCIDSET_WORD(doc_id)] & (1 << DOCIDSET_BIT(doc_id));
 }
 
@@ -497,22 +486,15 @@ _notmuch_threads_destructor (notmuch_threads_t *threads)
     return 0;
 }
 
-
-notmuch_threads_t *
-notmuch_query_search_threads (notmuch_query_t *query)
+notmuch_status_t
+notmuch_query_search_threads_st (notmuch_query_t *query, notmuch_threads_t **out)
 {
-    notmuch_status_t status;
-    notmuch_threads_t *threads;
-    status = notmuch_query_search_threads_st (query, &threads);
-    if (status)
-	return NULL;
-    else
-	return threads;
+    return notmuch_query_search_threads(query, out);
 }
 
 notmuch_status_t
-notmuch_query_search_threads_st (notmuch_query_t *query,
-				 notmuch_threads_t **out)
+notmuch_query_search_threads (notmuch_query_t *query,
+			      notmuch_threads_t **out)
 {
     notmuch_threads_t *threads;
     notmuch_messages_t *messages;
@@ -526,13 +508,13 @@ notmuch_query_search_threads_st (notmuch_query_t *query,
 
     threads->query = query;
 
-    status = notmuch_query_search_messages_st (query, &messages);
+    status = notmuch_query_search_messages (query, &messages);
     if (status) {
 	talloc_free (threads);
 	return status;
     }
 
-    threads->doc_ids = g_array_new (FALSE, FALSE, sizeof (unsigned int));
+    threads->doc_ids = g_array_new (false, false, sizeof (unsigned int));
     while (notmuch_messages_valid (messages)) {
 	unsigned int doc_id = _notmuch_mset_messages_get_doc_id (messages);
 	g_array_append_val (threads->doc_ids, doc_id);
@@ -564,7 +546,7 @@ notmuch_threads_valid (notmuch_threads_t *threads)
     unsigned int doc_id;
 
     if (! threads)
-	return FALSE;
+	return false;
 
     while (threads->doc_id_pos < threads->doc_ids->len) {
 	doc_id = g_array_index (threads->doc_ids, unsigned int,
@@ -609,18 +591,14 @@ notmuch_threads_destroy (notmuch_threads_t *threads)
     talloc_free (threads);
 }
 
-unsigned int
-notmuch_query_count_messages (notmuch_query_t *query)
+notmuch_status_t
+notmuch_query_count_messages_st (notmuch_query_t *query, unsigned *count_out)
 {
-    notmuch_status_t status;
-    unsigned int count;
-
-    status = notmuch_query_count_messages_st (query, &count);
-    return status ? 0 : count;
+    return notmuch_query_count_messages (query, count_out);
 }
 
 notmuch_status_t
-notmuch_query_count_messages_st (notmuch_query_t *query, unsigned *count_out)
+notmuch_query_count_messages (notmuch_query_t *query, unsigned *count_out)
 {
     return _notmuch_query_count_documents (query, "mail", count_out);
 }
@@ -695,18 +673,14 @@ _notmuch_query_count_documents (notmuch_query_t *query, const char *type, unsign
     return NOTMUCH_STATUS_SUCCESS;
 }
 
-unsigned
-notmuch_query_count_threads (notmuch_query_t *query)
+notmuch_status_t
+notmuch_query_count_threads_st (notmuch_query_t *query, unsigned *count)
 {
-    notmuch_status_t status;
-    unsigned int count;
-
-    status = notmuch_query_count_threads_st (query, &count);
-    return status ? 0 : count;
+    return notmuch_query_count_threads (query, count);
 }
 
 notmuch_status_t
-notmuch_query_count_threads_st (notmuch_query_t *query, unsigned *count)
+notmuch_query_count_threads (notmuch_query_t *query, unsigned *count)
 {
     notmuch_messages_t *messages;
     GHashTable *hash;
@@ -715,7 +689,7 @@ notmuch_query_count_threads_st (notmuch_query_t *query, unsigned *count)
 
     sort = query->sort;
     query->sort = NOTMUCH_SORT_UNSORTED;
-    ret = notmuch_query_search_messages_st (query, &messages);
+    ret = notmuch_query_search_messages (query, &messages);
     if (ret)
 	return ret;
     query->sort = sort;
