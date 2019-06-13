@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 #
 # Copyright (c) 2011-2012 David Bremner <david@tethera.net>
 #
@@ -415,7 +415,7 @@ _PAGES['html'] = HtmlPage(
     header=header_template.format(**context),
     footer=footer_template.format(**context),
     message_url_template=config['meta'].get(
-        'message-url', 'http://mid.gmane.org/{message-id}'),
+        'message-url', 'https://mid.gmane.org/{message-id}'),
     )
 
 if args.list_views:

@@ -103,7 +103,7 @@ Note that these functions use `mail-citation-hook' if that is non-nil."
   "Function to decide which parts get a header when replying.
 
 This function specifies which parts of a mime message with
-mutiple parts get a header."
+multiple parts get a header."
   :type '(radio (const :tag "No part headers"
 		               notmuch-show-reply-insert-header-p-never)
 		(const :tag "All except multipart/* and hidden parts"
@@ -543,6 +543,7 @@ unencrypted.  Really send? "))))
 
 (defun notmuch-mua-send-common (arg &optional exit)
   (interactive "P")
+  (run-hooks 'notmuch-mua-send-hook)
   (when (and (notmuch-mua-check-no-misplaced-secure-tag)
 	     (notmuch-mua-check-secure-tag-has-newline))
     (letf (((symbol-function 'message-do-fcc) #'notmuch-maildir-message-do-fcc))

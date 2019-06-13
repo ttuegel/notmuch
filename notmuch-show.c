@@ -272,6 +272,7 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
     GMimeContentType *content_type = g_mime_object_get_content_type (GMIME_OBJECT (part));
     GMimeStream *stream_filter = NULL;
     GMimeFilter *crlf_filter = NULL;
+    GMimeFilter *windows_filter = NULL;
     GMimeDataWrapper *wrapper;
     const char *charset;
 
@@ -282,13 +283,37 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
     if (stream_out == NULL)
 	return;
 
+    charset = g_mime_object_get_content_type_parameter (part, "charset");
+    charset = charset ? g_mime_charset_canon_name (charset) : NULL;
+    wrapper = g_mime_part_get_content_object (GMIME_PART (part));
+    if (wrapper && charset && !g_ascii_strncasecmp (charset, "iso-8859-", 9)) {
+	GMimeStream *null_stream = NULL;
+	GMimeStream *null_stream_filter = NULL;
+
+	/* Check for mislabeled Windows encoding */
+	null_stream = g_mime_stream_null_new ();
+	null_stream_filter = g_mime_stream_filter_new (null_stream);
+	windows_filter = g_mime_filter_windows_new (charset);
+	g_mime_stream_filter_add(GMIME_STREAM_FILTER (null_stream_filter),
+				 windows_filter);
+	g_mime_data_wrapper_write_to_stream (wrapper, null_stream_filter);
+	charset = g_mime_filter_windows_real_charset(
+	    (GMimeFilterWindows *) windows_filter);
+
+	if (null_stream_filter)
+	    g_object_unref (null_stream_filter);
+	if (null_stream)
+	    g_object_unref (null_stream);
+	/* Keep a reference to windows_filter in order to prevent the
+	 * charset string from deallocation. */
+    }
+
     stream_filter = g_mime_stream_filter_new (stream_out);
     crlf_filter = g_mime_filter_crlf_new (false, false);
     g_mime_stream_filter_add(GMIME_STREAM_FILTER (stream_filter),
 			     crlf_filter);
     g_object_unref (crlf_filter);
 
-    charset = g_mime_object_get_content_type_parameter (part, "charset");
     if (charset) {
 	GMimeFilter *charset_filter;
 	charset_filter = g_mime_filter_charset_new (charset, "UTF-8");
@@ -313,11 +338,12 @@ show_text_part_content (GMimeObject *part, GMimeStream *stream_out,
 	}
     }
 
-    wrapper = g_mime_part_get_content_object (GMIME_PART (part));
     if (wrapper && stream_filter)
 	g_mime_data_wrapper_write_to_stream (wrapper, stream_filter);
     if (stream_filter)
 	g_object_unref(stream_filter);
+    if (windows_filter)
+	g_object_unref (windows_filter);
 }
 
 static const char*
@@ -825,7 +851,7 @@ format_part_raw (unused (const void *ctx), unused (sprinter_t *sp),
 		return NOTMUCH_STATUS_FILE_ERROR;
 	    }
 
-	    if (fwrite (buf, size, 1, stdout) != 1) {
+	    if (size > 0 && fwrite (buf, size, 1, stdout) != 1) {
 		fprintf (stderr, "Error: Write failed\n");
 		fclose (file);
 		return NOTMUCH_STATUS_FILE_ERROR;
@@ -873,6 +899,11 @@ show_message (void *ctx,
     void *local = talloc_new (ctx);
     mime_node_t *root, *part;
     notmuch_status_t status;
+    unsigned int session_keys = 0;
+    notmuch_status_t session_key_count_error = NOTMUCH_STATUS_SUCCESS;
+
+    if (params->crypto.decrypt == NOTMUCH_DECRYPT_TRUE)
+	session_key_count_error = notmuch_message_count_properties (message, "session-key", &session_keys);
 
     status = mime_node_open (local, message, &(params->crypto), &root);
     if (status)
@@ -880,6 +911,21 @@ show_message (void *ctx,
     part = mime_node_seek_dfs (root, (params->part < 0 ? 0 : params->part));
     if (part)
 	status = format->part (local, sp, part, indent, params);
+#if HAVE_GMIME_SESSION_KEYS
+    if (params->crypto.decrypt == NOTMUCH_DECRYPT_TRUE && session_key_count_error == NOTMUCH_STATUS_SUCCESS) {
+	unsigned int new_session_keys = 0;
+	if (notmuch_message_count_properties (message, "session-key", &new_session_keys) == NOTMUCH_STATUS_SUCCESS &&
+	    new_session_keys > session_keys) {
+	    /* try a quiet re-indexing */
+	    notmuch_indexopts_t *indexopts = notmuch_database_get_default_indexopts (notmuch_message_get_database (message));
+	    if (indexopts) {
+		notmuch_indexopts_set_decrypt_policy (indexopts, NOTMUCH_DECRYPT_AUTO);
+		print_status_message ("Error re-indexing message with --decrypt=stash",
+				      message, notmuch_message_reindex (message, indexopts));
+	    }
+	}
+    }
+#endif
   DONE:
     talloc_free (local);
     return status;
@@ -1104,6 +1150,7 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	  (notmuch_keyword_t []){ { "false", NOTMUCH_DECRYPT_FALSE },
 				  { "auto", NOTMUCH_DECRYPT_AUTO },
 				  { "true", NOTMUCH_DECRYPT_NOSTASH },
+				  { "stash", NOTMUCH_DECRYPT_TRUE },
 				  { 0, 0 } } },
 	{ .opt_bool = &params.crypto.verify, .name = "verify" },
 	{ .opt_bool = &params.output_body, .name = "body" },
@@ -1119,7 +1166,8 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
     notmuch_process_shared_options (argv[0]);
 
     /* explicit decryption implies verification */
-    if (params.crypto.decrypt == NOTMUCH_DECRYPT_NOSTASH)
+    if (params.crypto.decrypt == NOTMUCH_DECRYPT_NOSTASH ||
+	params.crypto.decrypt == NOTMUCH_DECRYPT_TRUE)
 	params.crypto.verify = true;
 
     /* specifying a part implies single message display */
@@ -1182,8 +1230,11 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
     params.crypto.gpgpath = notmuch_config_get_crypto_gpg_path (config);
 #endif
 
+    notmuch_database_mode_t mode = NOTMUCH_DATABASE_MODE_READ_ONLY;
+    if (params.crypto.decrypt == NOTMUCH_DECRYPT_TRUE)
+	mode = NOTMUCH_DATABASE_MODE_READ_WRITE;
     if (notmuch_database_open (notmuch_config_get_database_path (config),
-			       NOTMUCH_DATABASE_MODE_READ_ONLY, &notmuch))
+			       mode, &notmuch))
 	return EXIT_FAILURE;
 
     notmuch_exit_if_unmatched_db_uuid (notmuch);

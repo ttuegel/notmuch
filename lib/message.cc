@@ -32,6 +32,7 @@ struct _notmuch_message {
     int frozen;
     char *message_id;
     char *thread_id;
+    size_t thread_depth;
     char *in_reply_to;
     notmuch_string_list_t *tag_list;
     notmuch_string_list_t *filename_term_list;
@@ -41,6 +42,7 @@ struct _notmuch_message {
     notmuch_message_file_t *message_file;
     notmuch_string_list_t *property_term_list;
     notmuch_string_map_t *property_map;
+    notmuch_string_list_t *reference_list;
     notmuch_message_list_t *replies;
     unsigned long flags;
     /* For flags that are initialized on-demand, lazy_flags indicates
@@ -118,6 +120,9 @@ _notmuch_message_create_for_document (const void *talloc_owner,
     /* the message is initially not synchronized with Xapian */
     message->last_view = 0;
 
+    /* Calculated after the thread structure is computed */
+    message->thread_depth = 0;
+
     /* Each of these will be lazily created as needed. */
     message->message_id = NULL;
     message->thread_id = NULL;
@@ -130,6 +135,7 @@ _notmuch_message_create_for_document (const void *talloc_owner,
     message->author = NULL;
     message->property_term_list = NULL;
     message->property_map = NULL;
+    message->reference_list = NULL;
 
     message->replies = _notmuch_message_list_create (message);
     if (unlikely (message->replies == NULL)) {
@@ -269,7 +275,7 @@ _notmuch_message_create_for_message_id (notmuch_database_t *notmuch,
 
 	doc_id = _notmuch_database_generate_doc_id (notmuch);
     } catch (const Xapian::Error &error) {
-	_notmuch_database_log(_notmuch_message_database (message), "A Xapian exception occurred creating message: %s\n",
+	_notmuch_database_log(notmuch_message_get_database (message), "A Xapian exception occurred creating message: %s\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = true;
 	*status_ret = NOTMUCH_PRIVATE_STATUS_XAPIAN_EXCEPTION;
@@ -319,6 +325,23 @@ _notmuch_message_get_term (notmuch_message_t *message,
     return value;
 }
 
+/*
+ * For special applications where we only want the thread id, reading
+ * in all metadata is a heavy I/O penalty.
+ */
+const char *
+_notmuch_message_get_thread_id_only (notmuch_message_t *message)
+{
+
+    Xapian::TermIterator i = message->doc.termlist_begin ();
+    Xapian::TermIterator end = message->doc.termlist_end ();
+
+    message->thread_id = _notmuch_message_get_term (message, i, end,
+						    _find_prefix ("thread"));
+    return message->thread_id;
+}
+
+
 static void
 _notmuch_message_ensure_metadata (notmuch_message_t *message, void *field)
 {
@@ -333,6 +356,7 @@ _notmuch_message_ensure_metadata (notmuch_message_t *message, void *field)
 	*type_prefix = _find_prefix ("type"),
 	*filename_prefix = _find_prefix ("file-direntry"),
 	*property_prefix = _find_prefix ("property"),
+	*reference_prefix = _find_prefix ("reference"),
 	*replyto_prefix = _find_prefix ("replyto");
 
     /* We do this all in a single pass because Xapian decompresses the
@@ -396,6 +420,14 @@ _notmuch_message_ensure_metadata (notmuch_message_t *message, void *field)
 		message->property_term_list =
 		    _notmuch_database_get_terms_with_prefix (message, i, end,
 							 property_prefix);
+
+	    /* get references */
+	    assert (strcmp (property_prefix, reference_prefix) < 0);
+	    if (!message->reference_list) {
+		message->reference_list =
+		    _notmuch_database_get_terms_with_prefix (message, i, end,
+							     reference_prefix);
+	    }
 
 	    /* Get reply to */
 	    assert (strcmp (property_prefix, replyto_prefix) < 0);
@@ -496,7 +528,7 @@ _notmuch_message_ensure_message_file (notmuch_message_t *message)
 	return;
 
     message->message_file = _notmuch_message_file_open_ctx (
-	_notmuch_message_database (message), message, filename);
+	notmuch_message_get_database (message), message, filename);
 }
 
 const char *
@@ -526,7 +558,7 @@ notmuch_message_get_header (notmuch_message_t *message, const char *header)
 		return talloc_strdup (message, value.c_str ());
 
 	} catch (Xapian::Error &error) {
-	    _notmuch_database_log(_notmuch_message_database (message), "A Xapian exception occurred when reading header: %s\n",
+	    _notmuch_database_log(notmuch_message_get_database (message), "A Xapian exception occurred when reading header: %s\n",
 		     error.get_msg().c_str());
 	    message->notmuch->exception_reported = true;
 	    return NULL;
@@ -570,6 +602,84 @@ _notmuch_message_add_reply (notmuch_message_t *message,
 			    notmuch_message_t *reply)
 {
     _notmuch_message_list_add_message (message->replies, reply);
+}
+
+size_t
+_notmuch_message_get_thread_depth (notmuch_message_t *message) {
+    return message->thread_depth;
+}
+
+void
+_notmuch_message_label_depths (notmuch_message_t *message,
+			       size_t depth)
+{
+    message->thread_depth = depth;
+
+    for (notmuch_messages_t *messages = _notmuch_messages_create (message->replies);
+	 notmuch_messages_valid (messages);
+	 notmuch_messages_move_to_next (messages)) {
+	notmuch_message_t *child = notmuch_messages_get (messages);
+	_notmuch_message_label_depths (child, depth+1);
+    }
+}
+
+const notmuch_string_list_t *
+_notmuch_message_get_references (notmuch_message_t *message)
+{
+    _notmuch_message_ensure_metadata (message, message->reference_list);
+    return message->reference_list;
+}
+
+static int
+_cmpmsg (const void *pa, const void *pb)
+{
+    notmuch_message_t **a = (notmuch_message_t **) pa;
+    notmuch_message_t **b = (notmuch_message_t **) pb;
+    time_t time_a = notmuch_message_get_date (*a);
+    time_t time_b = notmuch_message_get_date (*b);
+
+    if (time_a == time_b)
+	return 0;
+    else if (time_a < time_b)
+	return -1;
+    else
+	return 1;
+}
+
+notmuch_message_list_t *
+_notmuch_message_sort_subtrees (void *ctx, notmuch_message_list_t *list)
+{
+
+    size_t count = 0;
+    size_t capacity = 16;
+
+    if (! list)
+	return list;
+
+    void *local = talloc_new (NULL);
+    notmuch_message_list_t *new_list = _notmuch_message_list_create (ctx);
+    notmuch_message_t **message_array = talloc_zero_array (local, notmuch_message_t *, capacity);
+
+    for (notmuch_messages_t *messages = _notmuch_messages_create (list);
+	 notmuch_messages_valid (messages);
+	 notmuch_messages_move_to_next (messages)) {
+	notmuch_message_t *root = notmuch_messages_get (messages);
+	if (count >= capacity) {
+	    capacity *= 2;
+	    message_array = talloc_realloc (local, message_array, notmuch_message_t *, capacity);
+	}
+	message_array[count++] = root;
+	root->replies = _notmuch_message_sort_subtrees (root, root->replies);
+    }
+
+    qsort (message_array, count, sizeof (notmuch_message_t *), _cmpmsg);
+    for (size_t i = 0; i < count; i++) {
+	_notmuch_message_list_add_message (new_list, message_array[i]);
+    }
+
+    talloc_free (local);
+    talloc_free (list);
+    return new_list;
 }
 
 notmuch_messages_t *
@@ -647,7 +757,7 @@ _notmuch_message_remove_indexed_terms (notmuch_message_t *message)
 	    notmuch_database_t *notmuch = message->notmuch;
 
 	    if (!notmuch->exception_reported) {
-		_notmuch_database_log(_notmuch_message_database (message), "A Xapian exception occurred creating message: %s\n",
+		_notmuch_database_log(notmuch_message_get_database (message), "A Xapian exception occurred creating message: %s\n",
 				      error.get_msg().c_str());
 		notmuch->exception_reported = true;
 	    }
@@ -1043,7 +1153,7 @@ notmuch_message_get_date (notmuch_message_t *message)
     try {
 	value = message->doc.get_value (NOTMUCH_VALUE_TIMESTAMP);
     } catch (Xapian::Error &error) {
-	_notmuch_database_log(_notmuch_message_database (message), "A Xapian exception occurred when reading date: %s\n",
+	_notmuch_database_log(notmuch_message_get_database (message), "A Xapian exception occurred when reading date: %s\n",
 		 error.get_msg().c_str());
 	message->notmuch->exception_reported = true;
 	return 0;
@@ -1909,7 +2019,7 @@ notmuch_message_destroy (notmuch_message_t *message)
 }
 
 notmuch_database_t *
-_notmuch_message_database (notmuch_message_t *message)
+notmuch_message_get_database (const notmuch_message_t *message)
 {
     return message->notmuch;
 }
@@ -1986,7 +2096,7 @@ notmuch_message_reindex (notmuch_message_t *message,
     /* strdup it because the metadata may be invalidated */
     orig_thread_id = talloc_strdup (message, orig_thread_id);
 
-    notmuch = _notmuch_message_database (message);
+    notmuch = notmuch_message_get_database (message);
 
     ret = _notmuch_database_ensure_writable (notmuch);
     if (ret)

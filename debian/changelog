@@ -1,3 +1,114 @@
+notmuch (0.28.4-1) unstable; urgency=medium
+
+  * New upstream bugfix release
+  * Fix for bug in 'notmuch show --raw' that causes spurious errors to be
+    reported when the mail file is a multiple of the libc buffer size
+    (e.g. 4096 bytes).
+
+ -- David Bremner <bremner@debian.org>  Sun, 05 May 2019 08:08:56 -0300
+
+notmuch (0.28.3-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+  * Fix for bug in message property search
+  * Fix for race condition leading to (very) occasional build failures
+    when building the documentation.
+
+ -- David Bremner <bremner@debian.org>  Tue, 05 Mar 2019 15:39:09 -0400
+
+notmuch (0.28.2-1) unstable; urgency=medium
+
+  * [notmuch-emacs] Invoke gpg from with --batch and --no-tty
+
+ -- David Bremner <bremner@debian.org>  Sun, 17 Feb 2019 07:30:33 -0400
+
+notmuch (0.28.1-1) unstable; urgency=medium
+
+  * New upstream bug fix release
+  * Bug fix: "muttprint/evince fails to show "print", thanks to
+    Joerg Jaspert (Closes: #920856).
+
+ -- David Bremner <bremner@debian.org>  Fri, 01 Feb 2019 08:05:05 -0400
+
+notmuch (0.28-2) unstable; urgency=medium
+
+  * Override location of bash, because /usr/bin/bash might exist
+    thanks to usrmerge.
+
+ -- David Bremner <bremner@debian.org>  Fri, 12 Oct 2018 20:54:00 -0300
+
+notmuch (0.28-1) unstable; urgency=medium
+
+  * New upstream releases.
+  * Includes threading fixes, support for relative database paths, and
+    rewritten zsh completion.
+
+ -- David Bremner <bremner@debian.org>  Fri, 12 Oct 2018 20:17:27 -0300
+
+notmuch (0.28~rc0-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+
+ -- David Bremner <bremner@debian.org>  Wed, 03 Oct 2018 20:36:57 -0300
+
+notmuch (0.27-3) unstable; urgency=medium
+
+  * Update Vcs-Git to use https and specify correct branch
+  * Update Build-depends for unversioned emacs packages.
+
+ -- David Bremner <bremner@debian.org>  Sat, 08 Sep 2018 18:20:10 -0300
+
+notmuch (0.27-2) unstable; urgency=medium
+
+  * Add texinfo as a build-dep, build info version of documentation.
+
+ -- David Bremner <bremner@debian.org>  Thu, 28 Jun 2018 21:01:29 -0300
+
+notmuch (0.27-1) unstable; urgency=medium
+
+  * New upstream feature release
+    - thread subqueries (match terms in different messages of same thread)
+    - notmuch new --full-scan (ignore mtimes)
+    - notmuch show --decrypt=stash (decrypt and stash on first read)
+
+ -- David Bremner <bremner@debian.org>  Tue, 12 Jun 2018 22:39:33 -0300
+
+notmuch (0.27~rc1-1) experimental; urgency=medium
+
+  * New upstream release candidate
+
+ -- David Bremner <bremner@debian.org>  Thu, 31 May 2018 08:19:00 -0300
+
+notmuch (0.27~rc0-1) experimental; urgency=medium
+
+  * New upstream release candidate
+
+ -- David Bremner <bremner@debian.org>  Sat, 26 May 2018 09:12:37 -0700
+
+notmuch (0.26.2-2) unstable; urgency=medium
+
+  * Mark gdb and dtach as <!nocheck>, meaning they are only needed for
+    the test suite.
+  * Re-enable gdb based tests on s390x, ppc64el, armel, mipsel, they
+    pass on porterbox. Leave disabled on mipsel64 (gdb tests still
+    failing), and mips (many tests fail on porterbox).
+
+ -- David Bremner <bremner@debian.org>  Sun, 06 May 2018 08:36:52 -0300
+
+notmuch (0.26.2-1) unstable; urgency=medium
+
+  * Upstream bugfix release
+    - Break reference loops when indexing, fixes INTERNAL_ERROR in "notmuch show"
+    - Don't call get_mset(0,0,X), fixes crash on some gcc8 using distros
+
+ -- David Bremner <bremner@debian.org>  Sat, 28 Apr 2018 08:10:24 -0300
+
+notmuch (0.26.1-1) unstable; urgency=medium
+
+  * Bump LIBRARY_MINOR_VERSION to 1, for new functions in 0.26
+
+ -- David Bremner <bremner@debian.org>  Mon, 02 Apr 2018 08:08:01 -0300
+
 notmuch (0.26-1) unstable; urgency=medium
 
   [ Daniel Kahn Gillmor ]
@@ -529,7 +640,7 @@ notmuch (0.18-3) unstable; urgency=medium
 notmuch (0.18-2) unstable; urgency=medium
 
   * Disable atomicity tests on armhf. These should be re-enabled when
-    upstream relases a fix for this (in progress).
+    upstream releases a fix for this (in progress).
 
  -- David Bremner <bremner@debian.org>  Thu, 08 May 2014 08:28:33 +0900
 
@@ -950,7 +1061,7 @@ notmuch (0.6.1-1) unstable; urgency=low
 notmuch (0.6) unstable; urgency=low
 
   * New upstream release; see /usr/share/doc/notmuch/NEWS for
-    details. Hilights include:
+    details. Highlights include:
     - Folder-based search (Closes: #597222)
     - PGP/MIME decryption and verification
   * Document strict dependency on emacs23 (Closes: #631994).
