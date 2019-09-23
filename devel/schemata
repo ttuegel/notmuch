@@ -4,9 +4,9 @@ format (currently JSON and S-Expressions).
 []'s indicate lists.  List items can be marked with a '?', meaning
 they are optional; or a '*', meaning there can be zero or more of that
 item.  {}'s indicate an object that maps from field identifiers to
-values.  An object field marked '?' is optional.  |'s indicate
-alternates (e.g., int|string means something can be an int or a
-string).
+values.  An object field marked '?' is optional; one marked with '*'
+can repeat (with a different name). |'s indicate alternates (e.g.,
+int|string means something can be an int or a string).
 
 For S-Expression output, lists are printed delimited by () instead of
 []. Objects are printed as p-lists, i.e. lists where the keys and values
@@ -33,6 +33,8 @@ v3
 v4
 - replace signature error integer bitmask with a set of flags for
   individual errors.
+- (notmuch 0.29) added message.crypto to identify overall message
+  cryptographic state
 
 Common non-terminals
 --------------------
@@ -45,6 +47,9 @@ threadid = string
 
 # Message ID, sans "id:"
 messageid = string
+
+# E-mail header name, sans trailing colon, like "Subject" or "In-Reply-To"
+header_name = string
 
 notmuch show schema
 -------------------
@@ -73,7 +78,29 @@ message = {
     tags:           [string*],
 
     headers:        headers,
+    crypto:         crypto,
     body?:          [part]    # omitted if --body=false
+}
+
+# when showing the message, was any or all of it decrypted?
+msgdecstatus: "full"|"partial"
+
+# The overall cryptographic state of the message as a whole:
+crypto = {
+    signed?:    {
+                  status:      sigstatus,
+                  # was the set of signatures described under encrypted cover?
+                  encrypted:   bool,
+                  # which of the headers is covered by sigstatus?
+                  headers:     [header_name*]
+                },
+    decrypted?: {
+                  status: msgdecstatus,
+                  # map encrypted headers that differed from the outside headers.
+                  # the value of each item in the map is what that field showed externally
+                  # (maybe null if it was not present in the external headers).
+                  header-mask:  { header_name*: string|null }
+                }
 }
 
 # A MIME part (format_part_sprinter)

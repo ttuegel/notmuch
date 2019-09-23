@@ -47,7 +47,6 @@ output=$(notmuch search 'path:/^bad$/' | notmuch_search_sanitize)
 test_expect_equal "$output" "thread:XXX   2001-01-05 [1/1] Notmuch Test Suite; To the bone (inbox unread)"
 
 # Use "standard" corpus from here on.
-rm -rf $MAIL_DIR
 add_email_corpus
 
 notmuch search --output=messages from:cworth > cworth.msg-ids
@@ -76,6 +75,17 @@ test_expect_equal_file cworth.msg-ids OUTPUT
 
 test_begin_subtest "xapian wildcard search for subject:"
 test_expect_equal $(notmuch count 'subject:count*') 1
+
+add_message '[from]="and"' '[subject]="and-and-and"'
+printf "id:$gen_msg_id\n" > EXPECTED
+
+test_begin_subtest "quoted xapian keyword search for from:"
+notmuch search --output=messages 'from:"and"' > OUTPUT
+test_expect_equal_file EXPECTED OUTPUT
+
+test_begin_subtest "quoted xapian keyword search for subject:"
+notmuch search --output=messages 'subject:"and-and-and"' > OUTPUT
+test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "regexp from search, case sensitive"
 notmuch search --output=messages from:/carl/ > OUTPUT
@@ -137,10 +147,10 @@ EOF
 test_expect_equal_file EXPECTED OUTPUT
 
 test_begin_subtest "regexp error reporting"
-notmuch search 'from:/unbalanced[/' 1>OUTPUT 2>&1
+notmuch search 'from:/unbalanced[/' 2>&1 | sed -e '/^A Xapian/ s/[^:]*$//' > OUTPUT
 cat <<EOF > EXPECTED
 notmuch search: A Xapian exception occurred
-A Xapian exception occurred parsing query: Invalid regular expression
+A Xapian exception occurred parsing query: Regexp error:
 Query string was: from:/unbalanced[/
 EOF
 test_expect_equal_file EXPECTED OUTPUT

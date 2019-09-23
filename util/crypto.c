@@ -24,126 +24,14 @@
 
 #define ARRAY_SIZE(arr) (sizeof (arr) / sizeof (arr[0]))
 
-#if (GMIME_MAJOR_VERSION < 3)
-/* Create or pass on a GPG context (GMime 2.6) */
-static notmuch_status_t
-get_gpg_context (_notmuch_crypto_t *crypto, GMimeCryptoContext **ctx)
-{
-    if (ctx == NULL || crypto == NULL)
-	return NOTMUCH_STATUS_NULL_POINTER;
-
-    if (crypto->gpgctx) {
-	*ctx = crypto->gpgctx;
-	return NOTMUCH_STATUS_SUCCESS;
-    }
-
-    /* TODO: GMimePasswordRequestFunc */
-    crypto->gpgctx = g_mime_gpg_context_new (NULL, crypto->gpgpath ? crypto->gpgpath : "gpg");
-    if (! crypto->gpgctx) {
-	return NOTMUCH_STATUS_FAILED_CRYPTO_CONTEXT_CREATION;
-    }
-
-    g_mime_gpg_context_set_use_agent ((GMimeGpgContext *) crypto->gpgctx, true);
-    g_mime_gpg_context_set_always_trust ((GMimeGpgContext *) crypto->gpgctx, false);
-
-    *ctx = crypto->gpgctx;
-    return NOTMUCH_STATUS_SUCCESS;
-}
-
-/* Create or pass on a PKCS7 context (GMime 2.6) */
-static notmuch_status_t
-get_pkcs7_context (_notmuch_crypto_t *crypto, GMimeCryptoContext **ctx)
-{
-    if (ctx == NULL || crypto == NULL)
-	return NOTMUCH_STATUS_NULL_POINTER;
-
-    if (crypto->pkcs7ctx) {
-	*ctx = crypto->pkcs7ctx;
-	return NOTMUCH_STATUS_SUCCESS;
-    }
-
-    /* TODO: GMimePasswordRequestFunc */
-    crypto->pkcs7ctx = g_mime_pkcs7_context_new (NULL);
-    if (! crypto->pkcs7ctx) {
-	return NOTMUCH_STATUS_FAILED_CRYPTO_CONTEXT_CREATION;
-    }
-
-    g_mime_pkcs7_context_set_always_trust ((GMimePkcs7Context *) crypto->pkcs7ctx,
-					   false);
-
-    *ctx = crypto->pkcs7ctx;
-    return NOTMUCH_STATUS_SUCCESS;
-}
-static const struct {
-    const char *protocol;
-    notmuch_status_t (*get_context) (_notmuch_crypto_t *crypto, GMimeCryptoContext **ctx);
-} protocols[] = {
-    {
-	.protocol = "application/pgp-signature",
-	.get_context = get_gpg_context,
-    },
-    {
-	.protocol = "application/pgp-encrypted",
-	.get_context = get_gpg_context,
-    },
-    {
-	.protocol = "application/pkcs7-signature",
-	.get_context = get_pkcs7_context,
-    },
-    {
-	.protocol = "application/x-pkcs7-signature",
-	.get_context = get_pkcs7_context,
-    },
-};
-
-/* for the specified protocol return the context pointer (initializing
- * if needed) */
-notmuch_status_t
-_notmuch_crypto_get_gmime_ctx_for_protocol (_notmuch_crypto_t *crypto,
-					    const char *protocol,
-					    GMimeCryptoContext **ctx)
-{
-    if (! protocol)
-	return NOTMUCH_STATUS_MALFORMED_CRYPTO_PROTOCOL;
-
-    /* As per RFC 1847 section 2.1: "the [protocol] value token is
-     * comprised of the type and sub-type tokens of the Content-Type".
-     * As per RFC 1521 section 2: "Content-Type values, subtypes, and
-     * parameter names as defined in this document are
-     * case-insensitive."  Thus, we use strcasecmp for the protocol.
-     */
-    for (size_t i = 0; i < ARRAY_SIZE (protocols); i++) {
-	if (strcasecmp (protocol, protocols[i].protocol) == 0)
-	    return protocols[i].get_context (crypto, ctx);
-    }
-
-    return NOTMUCH_STATUS_UNKNOWN_CRYPTO_PROTOCOL;
-}
-
-void
-_notmuch_crypto_cleanup (_notmuch_crypto_t *crypto)
-{
-    if (crypto->gpgctx) {
-	g_object_unref (crypto->gpgctx);
-	crypto->gpgctx = NULL;
-    }
-
-    if (crypto->pkcs7ctx) {
-	g_object_unref (crypto->pkcs7ctx);
-	crypto->pkcs7ctx = NULL;
-    }
-}
-#else
 void _notmuch_crypto_cleanup (unused(_notmuch_crypto_t *crypto))
 {
 }
-#endif
 
 GMimeObject *
 _notmuch_crypto_decrypt (bool *attempted,
 			 notmuch_decryption_policy_t decrypt,
 			 notmuch_message_t *message,
-			 g_mime_3_unused(GMimeCryptoContext* crypto_ctx),
 			 GMimeMultipartEncrypted *part,
 			 GMimeDecryptResult **decrypt_result,
 			 GError **err)
@@ -152,8 +40,7 @@ _notmuch_crypto_decrypt (bool *attempted,
     if (decrypt == NOTMUCH_DECRYPT_FALSE)
 	return NULL;
 
-    /* the versions of notmuch that can support session key decryption */
-#if HAVE_GMIME_SESSION_KEYS
+    /* try decryption with session key if one is stashed */
     if (message) {
 	notmuch_message_properties_t *list = NULL;
 
@@ -165,17 +52,10 @@ _notmuch_crypto_decrypt (bool *attempted,
 	    }
 	    if (attempted)
 		*attempted = true;
-#if (GMIME_MAJOR_VERSION < 3)
-	    ret = g_mime_multipart_encrypted_decrypt_session (part,
-							      crypto_ctx,
-							      notmuch_message_properties_value (list),
-							      decrypt_result, err);
-#else
 	    ret = g_mime_multipart_encrypted_decrypt (part,
 						      GMIME_DECRYPT_NONE,
 						      notmuch_message_properties_value (list),
 						      decrypt_result, err);
-#endif
 	    if (ret)
 		break;
 	}
@@ -184,7 +64,6 @@ _notmuch_crypto_decrypt (bool *attempted,
 	if (ret)
 	    return ret;
     }
-#endif
 
     if (err && *err) {
 	g_error_free (*err);
@@ -196,26 +75,140 @@ _notmuch_crypto_decrypt (bool *attempted,
 
     if (attempted)
 	*attempted = true;
-#if (GMIME_MAJOR_VERSION < 3)
-#if HAVE_GMIME_SESSION_KEYS
-    gboolean oldgetsk = g_mime_crypto_context_get_retrieve_session_key (crypto_ctx);
-    gboolean newgetsk = (decrypt == NOTMUCH_DECRYPT_TRUE && decrypt_result);
-    if (newgetsk != oldgetsk)
-	/* This could return an error, but we can't do anything about it, so ignore it */
-	g_mime_crypto_context_set_retrieve_session_key (crypto_ctx, newgetsk, NULL);
-#endif
-    ret = g_mime_multipart_encrypted_decrypt(part, crypto_ctx,
-					     decrypt_result, err);
-#if HAVE_GMIME_SESSION_KEYS
-    if (newgetsk != oldgetsk)
-	g_mime_crypto_context_set_retrieve_session_key (crypto_ctx, oldgetsk, NULL);
-#endif
-#else
     GMimeDecryptFlags flags = GMIME_DECRYPT_NONE;
     if (decrypt == NOTMUCH_DECRYPT_TRUE && decrypt_result)
 	flags |= GMIME_DECRYPT_EXPORT_SESSION_KEY;
     ret = g_mime_multipart_encrypted_decrypt(part, flags, NULL,
 					     decrypt_result, err);
-#endif
     return ret;
+}
+
+static int
+_notmuch_message_crypto_destructor (_notmuch_message_crypto_t *msg_crypto)
+{
+    if (!msg_crypto)
+	return 0;
+    if (msg_crypto->sig_list)
+	g_object_unref (msg_crypto->sig_list);
+    if (msg_crypto->payload_subject)
+	talloc_free (msg_crypto->payload_subject);
+    return 0;
+}
+
+_notmuch_message_crypto_t *
+_notmuch_message_crypto_new (void *ctx)
+{
+    _notmuch_message_crypto_t *ret = talloc_zero (ctx, _notmuch_message_crypto_t);
+    talloc_set_destructor (ret, _notmuch_message_crypto_destructor);
+    return ret;
+}
+
+notmuch_status_t
+_notmuch_message_crypto_potential_sig_list (_notmuch_message_crypto_t *msg_crypto, GMimeSignatureList *sigs)
+{
+    if (!msg_crypto)
+	return NOTMUCH_STATUS_NULL_POINTER;
+
+    /* Signatures that arrive after a payload part during DFS are not
+     * part of the cryptographic envelope: */
+    if (msg_crypto->payload_encountered)
+	return NOTMUCH_STATUS_SUCCESS;
+
+    if (msg_crypto->sig_list)
+	g_object_unref (msg_crypto->sig_list);
+
+    /* This signature list needs to persist as long as the _n_m_crypto
+     * object survives. Increasing its reference counter prevents
+     * garbage-collection until after _n_m_crypto_destroy is
+     * called. */
+    msg_crypto->sig_list = sigs;
+    if (sigs)
+	g_object_ref (sigs);
+
+    if (msg_crypto->decryption_status == NOTMUCH_MESSAGE_DECRYPTED_FULL)
+	msg_crypto->signature_encrypted = true;
+
+    return NOTMUCH_STATUS_SUCCESS;
+}
+
+
+notmuch_status_t
+_notmuch_message_crypto_potential_payload (_notmuch_message_crypto_t *msg_crypto, GMimeObject *payload, GMimeObject *parent, int childnum)
+{
+    const char *protected_headers = NULL;
+    const char *forwarded = NULL;
+    const char *subject = NULL;
+
+    if (!msg_crypto || !payload)
+	return NOTMUCH_STATUS_NULL_POINTER;
+
+    /* only fire on the first payload part encountered */
+    if (msg_crypto->payload_encountered)
+	return NOTMUCH_STATUS_SUCCESS;
+
+    /* the first child of multipart/encrypted that matches the
+     * encryption protocol should be "control information" metadata,
+     * not payload.  So we skip it. (see
+     * https://tools.ietf.org/html/rfc1847#page-8) */
+    if (parent && GMIME_IS_MULTIPART_ENCRYPTED (parent) && childnum == GMIME_MULTIPART_ENCRYPTED_VERSION) {
+	const char *enc_type = g_mime_object_get_content_type_parameter (parent, "protocol");
+	GMimeContentType *ct = g_mime_object_get_content_type (payload);
+	if (ct && enc_type) {
+	    const char *part_type = g_mime_content_type_get_mime_type (ct);
+	    if (part_type && strcmp (part_type, enc_type) == 0)
+		return NOTMUCH_STATUS_SUCCESS;
+	}
+    }
+
+    msg_crypto->payload_encountered = true;
+
+    /* don't bother recording anything if there is no cryptographic
+     * envelope: */
+    if ((msg_crypto->decryption_status != NOTMUCH_MESSAGE_DECRYPTED_FULL) &&
+	(msg_crypto->sig_list == NULL))
+	return NOTMUCH_STATUS_SUCCESS;
+
+    /* Verify that this payload has headers that are intended to be
+     * exported to the larger message: */
+
+    /* Consider a payload that uses Alexei Melinkov's forwarded="no" for
+     * message/global or message/rfc822:
+     * https://tools.ietf.org/html/draft-melnikov-smime-header-signing-05#section-4 */
+    forwarded = g_mime_object_get_content_type_parameter (payload, "forwarded");
+    if (GMIME_IS_MESSAGE_PART (payload) && forwarded && strcmp (forwarded, "no") == 0) {
+	GMimeMessage *message = g_mime_message_part_get_message (GMIME_MESSAGE_PART (payload));
+	subject = g_mime_message_get_subject (message);
+	/* FIXME: handle more than just Subject: at some point */
+    } else {
+	/* Consider "memoryhole"-style protected headers as practiced by Enigmail and K-9 */
+	protected_headers = g_mime_object_get_content_type_parameter (payload, "protected-headers");
+	if (protected_headers && strcasecmp("v1", protected_headers) == 0)
+	    subject = g_mime_object_get_header (payload, "Subject");
+	/* FIXME: handle more than just Subject: at some point */
+    }
+
+    if (subject) {
+	if (msg_crypto->payload_subject)
+	    talloc_free (msg_crypto->payload_subject);
+	msg_crypto->payload_subject = talloc_strdup (msg_crypto, subject);
+    }
+
+    return NOTMUCH_STATUS_SUCCESS;
+}
+
+
+notmuch_status_t
+_notmuch_message_crypto_successful_decryption (_notmuch_message_crypto_t *msg_crypto)
+{
+    if (!msg_crypto)
+	return NOTMUCH_STATUS_NULL_POINTER;
+
+    /* see the rationale for different values of
+     * _notmuch_message_decryption_status_t in util/crypto.h */
+    if (!msg_crypto->payload_encountered)
+	msg_crypto->decryption_status = NOTMUCH_MESSAGE_DECRYPTED_FULL;
+    else if (msg_crypto->decryption_status == NOTMUCH_MESSAGE_DECRYPTED_NONE)
+	msg_crypto->decryption_status = NOTMUCH_MESSAGE_DECRYPTED_PARTIAL;
+
+    return NOTMUCH_STATUS_SUCCESS;
 }

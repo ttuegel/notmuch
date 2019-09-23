@@ -62,7 +62,7 @@ notmuch-hello key bindings
 ``<return>``
     Activate the current widget.
 
-``=``
+``g`` ``=``
     Refresh the buffer; mainly update the counts of messages for various
     saved searches.
 
@@ -159,6 +159,9 @@ menu of results that the user can explore further by pressing
 ``<return>``
     Open thread on current line in :ref:`notmuch-show` mode
 
+``g`` ``=``
+    Refresh the buffer
+
 ``?``
     Display full set of key bindings
 
@@ -190,6 +193,9 @@ pressing RET after positioning the cursor on a hidden part.
     advance to the next message, or advance to the next thread (if
     already on the last message of a thread).
 
+``c``
+    :ref:`show-copy`
+
 ``N``
     Move to next message
 
@@ -208,6 +214,63 @@ pressing RET after positioning the cursor on a hidden part.
 ``?``
     Display full set of key bindings
 
+Display of messages can be controlled by the following variables
+
+:index:`notmuch-message-headers`
+       |docstring::notmuch-message-headers|
+
+:index:`notmuch-message-headers-visible`
+       |docstring::notmuch-message-headers-visible|
+
+.. _show-copy:
+
+Copy to kill-ring
+-----------------
+
+You can use the usually Emacs ways of copying text to the kill-ring,
+but notmuch also provides some shortcuts. These keys are available in
+:ref:`notmuch-show`, and :ref:`notmuch-tree`. A subset are available
+in :ref:`notmuch-search`.
+
+``c F``	``notmuch-show-stash-filename``
+   |docstring::notmuch-show-stash-filename|
+
+``c G`` ``notmuch-show-stash-git-send-email``
+   |docstring::notmuch-show-stash-git-send-email|
+
+``c I`` ``notmuch-show-stash-message-id-stripped``
+   |docstring::notmuch-show-stash-message-id-stripped|
+
+``c L`` ``notmuch-show-stash-mlarchive-link-and-go``
+   |docstring::notmuch-show-stash-mlarchive-link-and-go|
+
+``c T`` ``notmuch-show-stash-tags``
+   |docstring::notmuch-show-stash-tags|
+
+``c c`` ``notmuch-show-stash-cc``
+   |docstring::notmuch-show-stash-cc|
+
+``c d`` ``notmuch-show-stash-date``
+   |docstring::notmuch-show-stash-date|
+
+``c f`` ``notmuch-show-stash-from``
+   |docstring::notmuch-show-stash-from|
+
+``c i`` ``notmuch-show-stash-message-id``
+   |docstring::notmuch-show-stash-message-id|
+
+``c l`` ``notmuch-show-stash-mlarchive-link``
+   |docstring::notmuch-show-stash-mlarchive-link|
+
+``c s`` ``notmuch-show-stash-subject``
+   |docstring::notmuch-show-stash-subject|
+
+``c t`` ``notmuch-show-stash-to``
+   |docstring::notmuch-show-stash-to|
+
+``c ?``
+    Show all available copying commands
+
 .. _notmuch-tree:
 
 notmuch-tree
@@ -217,6 +280,9 @@ notmuch-tree
 email archives. Each line in the buffer represents a single
 message giving the relative date, the author, subject, and any
 tags.
+
+``c``
+    :ref:`show-copy`
 
 ``<return>``
    Displays that message.
@@ -232,6 +298,9 @@ tags.
 
 ``p``
     Move to previous matching message
+
+``g`` ``=``
+    Refresh the buffer
 
 ``?``
     Display full set of key bindings
@@ -275,7 +344,13 @@ operations specified in ``notmuch-tagging-keys``; i.e. each
 
 :index:`notmuch-tagging-keys`
 
-   A list of keys and corresponding tagging operations.
+  |docstring::notmuch-tagging-keys|
+
+Buffer navigation
+=================
+
+:index:`notmuch-cycle-notmuch-buffers`
+   |docstring::notmuch-cycle-notmuch-buffers|
 
 Configuration
 =============
@@ -286,8 +361,10 @@ Importing Mail
 --------------
 
 :index:`notmuch-poll`
+   |docstring::notmuch-poll|
 
 :index:`notmuch-poll-script`
+   |docstring::notmuch-poll-script|
 
 Init File
 ---------
@@ -300,3 +377,13 @@ suffix exist it will be read instead (just one of these, chosen in this
 order). Most often users create ``~/.emacs.d/notmuch-config.el`` and just
 work with it. If Emacs was invoked with the ``-q`` or ``--no-init-file``
 options, ``notmuch-init-file`` is not read.
+
+.. include:: ../emacs/rstdoc.rsti
+
+.. include:: ../emacs/notmuch.rsti
+
+.. include:: ../emacs/notmuch-lib.rsti
+
+.. include:: ../emacs/notmuch-show.rsti
+
+.. include:: ../emacs/notmuch-tag.rsti

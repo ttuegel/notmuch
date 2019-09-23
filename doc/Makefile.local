@@ -4,11 +4,11 @@ dir := doc
 
 # You can set these variables from the command line.
 SPHINXOPTS    := -q
-SPHINXBUILD   = sphinx-build
+SPHINXBUILD   = HAVE_EMACS=${HAVE_EMACS} WITH_EMACS=${WITH_EMACS} sphinx-build
 DOCBUILDDIR      := $(dir)/_build
 
 # Internal variables.
-ALLSPHINXOPTS   := -d $(DOCBUILDDIR)/doctrees $(SPHINXOPTS) $(srcdir)/$(dir)
+ALLSPHINXOPTS   := $(SPHINXOPTS) $(srcdir)/$(dir)
 APIMAN		:= $(DOCBUILDDIR)/man/man3/notmuch.3
 DOXYFILE	:= $(srcdir)/$(dir)/doxygen.cfg
 
@@ -16,6 +16,7 @@ MAN1_RST := $(wildcard $(srcdir)/doc/man1/*.rst)
 MAN5_RST := $(wildcard $(srcdir)/doc/man5/*.rst)
 MAN7_RST := $(wildcard $(srcdir)/doc/man7/*.rst)
 MAN_RST_FILES := $(MAN1_RST) $(MAN5_RST) $(MAN7_RST)
+ALL_RST_FILES := $(MAN_RST_FILES) $(srcdir)/doc/notmuch-emacs.rst
 
 MAN1_ROFF := $(patsubst $(srcdir)/doc/%,$(DOCBUILDDIR)/man/%,$(MAN1_RST:.rst=.1))
 MAN5_ROFF := $(patsubst $(srcdir)/doc/%,$(DOCBUILDDIR)/man/%,$(MAN5_RST:.rst=.5))
@@ -27,7 +28,11 @@ MAN_GZIP_FILES := $(addsuffix .gz,${MAN_ROFF_FILES})
 MAN1_TEXI := $(patsubst $(srcdir)/doc/man1/%.rst,$(DOCBUILDDIR)/texinfo/%.texi,$(MAN1_RST))
 MAN5_TEXI := $(patsubst $(srcdir)/doc/man5/%.rst,$(DOCBUILDDIR)/texinfo/%.texi,$(MAN5_RST))
 MAN7_TEXI := $(patsubst $(srcdir)/doc/man7/%.rst,$(DOCBUILDDIR)/texinfo/%.texi,$(MAN7_RST))
-INFO_TEXI_FILES := $(MAN1_TEXI) $(MAN5_TEXI) $(MAN7_TEXI) $(DOCBUILDDIR)/texinfo/notmuch-emacs.texi
+INFO_TEXI_FILES := $(MAN1_TEXI) $(MAN5_TEXI) $(MAN7_TEXI)
+ifeq ($(HAVE_EMACS)$(WITH_EMACS),11)
+	INFO_TEXI_FILES := $(INFO_TEXI_FILES) $(DOCBUILDDIR)/texinfo/notmuch-emacs.texi
+endif
+
 INFO_INFO_FILES := $(INFO_TEXI_FILES:.texi=.info)
 
 .PHONY: sphinx-html sphinx-texinfo sphinx-info
@@ -37,22 +42,24 @@ INFO_INFO_FILES := $(INFO_TEXI_FILES:.texi=.info)
 %.gz: %
 	rm -f $@ && gzip --stdout $^ > $@
 
-# Sequentialize the calls to sphinx-build to avoid races with
-# reading/writing cached state. This uses GNU make specific
-# "order-only" prerequisites.
+ifeq ($(WITH_EMACS),1)
+$(DOCBUILDDIR)/.roff.stamp sphinx-html sphinx-texinfo: docstring.stamp
+endif
 
-sphinx-html: | $(DOCBUILDDIR)/.roff.stamp
-sphinx-texinfo: | sphinx-html
-sphinx-info: | sphinx-texinfo
+sphinx-html: $(DOCBUILDDIR)/.html.stamp
 
-sphinx-html:
-	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(DOCBUILDDIR)/html
+$(DOCBUILDDIR)/.html.stamp: $(ALL_RST_FILES)
+	$(SPHINXBUILD) -b html -d $(DOCBUILDDIR)/html_doctrees $(ALLSPHINXOPTS) $(DOCBUILDDIR)/html
+	touch $@
 
-sphinx-texinfo:
-	$(SPHINXBUILD) -b texinfo $(ALLSPHINXOPTS) $(DOCBUILDDIR)/texinfo
+sphinx-texinfo: $(DOCBUILDDIR)/.texi.stamp
+
+$(DOCBUILDDIR)/.texi.stamp: $(ALL_RST_FILES)
+	$(SPHINXBUILD) -b texinfo -d $(DOCBUILDDIR)/texinfo_doctrees $(ALLSPHINXOPTS) $(DOCBUILDDIR)/texinfo
+	touch $@
 
 sphinx-info: sphinx-texinfo
-	make -C $(DOCBUILDDIR)/texinfo info
+	$(MAKE) -C $(DOCBUILDDIR)/texinfo info
 
 # Use the man page converter that is available. We should never depend
 # on MAN_ROFF_FILES if a converter is not available.
@@ -64,7 +71,7 @@ ${MAN_ROFF_FILES}: $(DOCBUILDDIR)/.roff.stamp
 # instance of this recipe for each roff file.
 $(DOCBUILDDIR)/.roff.stamp: ${MAN_RST_FILES}
 ifeq ($(HAVE_SPHINX),1)
-	$(SPHINXBUILD) -b man $(ALLSPHINXOPTS) $(DOCBUILDDIR)/man
+	$(SPHINXBUILD) -b man -d $(DOCBUILDDIR)/man_doctrees $(ALLSPHINXOPTS) $(DOCBUILDDIR)/man
 	for section in 1 5 7; do \
 	    mkdir -p $(DOCBUILDDIR)/man/man$${section}; \
 	    mv $(DOCBUILDDIR)/man/*.$${section} $(DOCBUILDDIR)/man/man$${section}; \
@@ -133,5 +140,6 @@ $(dir)/config.dox: version.stamp
 	echo "PROJECT_NAME = \"Notmuch $(VERSION)\"" > $@
 	echo "INPUT=${srcdir}/lib/notmuch.h" >> $@
 
-CLEAN := $(CLEAN) $(DOCBUILDDIR) $(DOCBUILDDIR)/.roff.stamp
+CLEAN := $(CLEAN) $(DOCBUILDDIR) $(DOCBUILDDIR)/.roff.stamp $(DOCBUILDDIR)/.texi.stamp
+CLEAN := $(CLEAN) $(DOCBUILDDIR)/.html.stamp
 CLEAN := $(CLEAN) $(MAN_GZIP_FILES) $(MAN_ROFF_FILES) $(dir)/conf.pyc $(dir)/config.dox

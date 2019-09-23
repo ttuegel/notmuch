@@ -82,6 +82,7 @@ WITH_API_DOCS=1
 WITH_EMACS=1
 WITH_DESKTOP=1
 WITH_BASH=1
+WITH_RPATH=1
 WITH_RUBY=1
 WITH_ZSH=1
 WITH_RETRY_LOCK=1
@@ -241,6 +242,14 @@ for option; do
 	fi
     elif [ "${option}" = '--without-bash-completion' ] ; then
 	WITH_BASH=0
+    elif [ "${option%%=*}" = '--with-rpath' ]; then
+	if [ "${option#*=}" = 'no' ]; then
+	    WITH_RPATH=0
+	else
+	    WITH_RPATH=1
+	fi
+    elif [ "${option}" = '--without-rpath' ] ; then
+	WITH_RPATH=0
     elif [ "${option%%=*}" = '--with-ruby' ]; then
 	if [ "${option#*=}" = 'no' ]; then
 	    WITH_RUBY=0
@@ -480,33 +489,78 @@ EOF
     rm -rf test.db _default_backend _default_backend.cc
 fi
 
-# we need to have a version >= 2.6.5 to avoid a crypto bug. We need
-# 2.6.7 for permissive "From " header handling.
-GMIME_MINVER=2.6.7
-GMIME3_MINVER=3.0.3
+GMIME_MINVER=3.0.3
 
 printf "Checking for GMime development files... "
-if pkg-config --exists "gmime-3.0 > $GMIME3_MINVER"; then
-    printf "Yes (3.0).\n"
+if pkg-config --exists "gmime-3.0 > $GMIME_MINVER"; then
+    printf "Yes.\n"
     have_gmime=1
     gmime_cflags=$(pkg-config --cflags gmime-3.0)
     gmime_ldflags=$(pkg-config --libs gmime-3.0)
-    gmime_major=3
-    have_gmime_session_keys=1
-elif pkg-config --exists "gmime-2.6 >= $GMIME_MINVER"; then
-    printf "Yes (2.6).\n"
-    have_gmime=1
-    gmime_cflags=$(pkg-config --cflags gmime-2.6)
-    gmime_ldflags=$(pkg-config --libs gmime-2.6)
-    gmime_major=2
-    if pkg-config --exists "gmime-2.6 >= 2.6.21"; then
-        have_gmime_session_keys=1
+
+    printf "Checking for GMime session key extraction support... "
+
+    cat > _check_session_keys.c <<EOF
+#include <gmime/gmime.h>
+#include <stdio.h>
+
+int main () {
+    GError *error = NULL;
+    GMimeParser *parser = NULL;
+    GMimeMultipartEncrypted *body = NULL;
+    GMimeDecryptResult *decrypt_result = NULL;
+    GMimeObject *output = NULL;
+
+    g_mime_init ();
+    parser = g_mime_parser_new ();
+    g_mime_parser_init_with_stream (parser, g_mime_stream_file_open("test/corpora/crypto/basic-encrypted.eml", "r", &error));
+    if (error) return !! fprintf (stderr, "failed to instantiate parser with test/corpora/crypto/basic-encrypted.eml\n");
+
+    body = GMIME_MULTIPART_ENCRYPTED(g_mime_message_get_mime_part (g_mime_parser_construct_message (parser, NULL)));
+    if (body == NULL) return !!	fprintf (stderr, "did not find a multipart encrypted message\n");
+
+    output = g_mime_multipart_encrypted_decrypt (body, GMIME_DECRYPT_EXPORT_SESSION_KEY, NULL, &decrypt_result, &error);
+    if (error || output == NULL) return !! fprintf (stderr, "decryption failed\n");
+
+    if (decrypt_result == NULL) return !! fprintf (stderr, "no GMimeDecryptResult found\n");
+    if (decrypt_result->session_key == NULL) return !! fprintf (stderr, "GMimeDecryptResult has no session key\n");
+
+    printf ("%s\n", decrypt_result->session_key);
+    return 0;
+}
+EOF
+    if ! TEMP_GPG=$(mktemp -d); then
+        printf 'No.\nCould not make tempdir for testing session-key support.\n'
+        errors=$((errors + 1))
+    elif ${CC} ${CFLAGS} ${gmime_cflags} _check_session_keys.c ${gmime_ldflags} -o _check_session_keys \
+           && GNUPGHOME=${TEMP_GPG} gpg --batch --quiet --import < test/gnupg-secret-key.asc \
+           && SESSION_KEY=$(GNUPGHOME=${TEMP_GPG} ./_check_session_keys) \
+           && [ $SESSION_KEY = 9:0BACD64099D1468AB07C796F0C0AC4851948A658A15B34E803865E9FC635F2F5 ]
+    then
+        printf "OK.\n"
     else
-        have_gmime_session_keys=0
+        cat <<EOF
+No.
+*** Error: Could not extract session keys from encrypted message.
+
+This is likely due to your GMime having been built against a old
+version of GPGME.
+
+Please try to rebuild your version of GMime against a more recent
+version of GPGME (at least GPGME 1.8.0).
+EOF
+        if command -v gpgme-config >/dev/null; then
+            printf 'Your current GPGME development version is: %s\n' "$(gpgme-config --version)"
+        else
+            printf 'You do not have the GPGME development libraries installed.\n'
+        fi
+        errors=$((errors + 1))
+    fi
+    if [ -n "$TEMP_GPG" -a -d "$TEMP_GPG" ]; then
+        rm -rf "$TEMP_GPG"
     fi
 else
     have_gmime=0
-    have_gmime_session_keys=0
     printf "No.\n"
     errors=$((errors + 1))
 fi
@@ -623,8 +677,8 @@ if [ -z "${EMACSETCDIR-}" ]; then
     EMACSETCDIR="\$(prefix)/share/emacs/site-lisp"
 fi
 
-printf "Checking if emacs is available... "
-if emacs --quick --batch > /dev/null 2>&1; then
+printf "Checking if emacs (>= 24) is available... "
+if emacs --quick --batch --eval '(if (< emacs-major-version 24) (kill-emacs 1))' > /dev/null 2>&1; then
     printf "Yes.\n"
     have_emacs=1
 else
@@ -779,7 +833,7 @@ EOF
 	echo
     fi
     if [ $have_gmime -eq 0 ]; then
-	echo "	GMime 2.6 library >= $GMIME_MINVER"
+	echo "	GMime library >= $GMIME_MINVER"
 	echo "	(including development files such as headers)"
 	echo "	https://github.com/jstedfast/gmime/"
 	echo
@@ -801,7 +855,7 @@ case a simple command will install everything you need. For example:
 
 On Debian and similar systems:
 
-	sudo apt-get install libxapian-dev libgmime-2.6-dev libtalloc-dev zlib1g-dev
+	sudo apt-get install libxapian-dev libgmime-3.0-dev libtalloc-dev zlib1g-dev
 
 Or on Fedora and similar systems:
 
@@ -928,7 +982,7 @@ fi
 rm -f compat/check_asctime
 
 printf "Checking for rpath support... "
-if ${CC} -Wl,--enable-new-dtags -Wl,-rpath,/tmp/ -o minimal minimal.c >/dev/null 2>&1
+if [ $WITH_RPATH = "1" ] && ${CC} -Wl,--enable-new-dtags -Wl,-rpath,/tmp/ -o minimal minimal.c >/dev/null 2>&1
 then
     printf "Yes.\n"
     rpath_ldflags="-Wl,--enable-new-dtags -Wl,-rpath,\$(libdir)"
@@ -977,7 +1031,7 @@ for flag in -Wmissing-declarations; do
 done
 printf "\n\t%s\n" "${WARN_CFLAGS}"
 
-rm -f minimal minimal.c _libversion.c _libversion _libversion.sh
+rm -f minimal minimal.c _libversion.c _libversion _libversion.sh _check_session_keys.c _check_session_keys
 
 # construct the Makefile.config
 cat > Makefile.config <<EOF
@@ -1165,9 +1219,6 @@ HAVE_TIMEGM = ${have_timegm}
 # Whether struct dirent has d_type (if not, then notmuch will use stat)
 HAVE_D_TYPE = ${have_d_type}
 
-# Whether the GMime version can handle extraction and reuse of session keys
-HAVE_GMIME_SESSION_KEYS = ${have_gmime_session_keys}
-
 # Whether the Xapian version in use supports compaction
 HAVE_XAPIAN_COMPACT = ${have_xapian_compact}
 
@@ -1254,7 +1305,6 @@ COMMON_CONFIGURE_CFLAGS = \\
 	-DHAVE_D_TYPE=\$(HAVE_D_TYPE)				\\
 	-DSTD_GETPWUID=\$(STD_GETPWUID)				\\
 	-DSTD_ASCTIME=\$(STD_ASCTIME)				\\
-	-DHAVE_GMIME_SESSION_KEYS=\$(HAVE_GMIME_SESSION_KEYS)	\\
 	-DHAVE_XAPIAN_COMPACT=\$(HAVE_XAPIAN_COMPACT)		\\
 	-DSILENCE_XAPIAN_DEPRECATION_WARNINGS			\\
 	-DHAVE_XAPIAN_FIELD_PROCESSOR=\$(HAVE_XAPIAN_FIELD_PROCESSOR) \\
@@ -1283,9 +1333,6 @@ NOTMUCH_HAVE_XAPIAN_FIELD_PROCESSOR=${have_xapian_field_processor}
 # Whether the Xapian version in use supports lock retry
 NOTMUCH_HAVE_XAPIAN_DB_RETRY_LOCK=${have_xapian_db_retry_lock}
 
-# Whether the GMime version can handle extraction and reuse of session keys
-NOTMUCH_HAVE_GMIME_SESSION_KEYS=${have_gmime_session_keys}
-
 # Which backend will Xapian use by default?
 NOTMUCH_DEFAULT_XAPIAN_BACKEND=${default_xapian_backend}
 
@@ -1309,9 +1356,6 @@ NOTMUCH_RUBY=${RUBY}
 # Are the ruby development files (and ruby) available? If not skip
 # building/testing ruby bindings.
 NOTMUCH_HAVE_RUBY_DEV=${have_ruby_dev}
-
-# Major version of gmime
-NOTMUCH_GMIME_MAJOR=${gmime_major}
 
 # Platform we are run on
 PLATFORM=${platform}

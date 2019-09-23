@@ -161,7 +161,7 @@ Supported options for **show** include
     Default: ``auto``
 
 ``--exclude=(true|false)``
-    Specify whether to omit threads only matching search.tag\_exclude
+    Specify whether to omit threads only matching search.exclude\_tags
     from the search results (the default) or not. In either case the
     excluded message will be marked with the exclude flag (except when
     output=mbox when there is nowhere to put the flag).
@@ -176,18 +176,19 @@ Supported options for **show** include
 ``--body=(true|false)``
     If true (the default) **notmuch show** includes the bodies of the
     messages in the output; if false, bodies are omitted.
-    ``--body=false`` is only implemented for the json and sexp formats
-    and it is incompatible with ``--part > 0.``
+    ``--body=false`` is only implemented for the text, json and sexp
+    formats and it is incompatible with ``--part > 0.``
 
     This is useful if the caller only needs the headers as body-less
     output is much faster and substantially smaller.
 
 ``--include-html``
-    Include "text/html" parts as part of the output (currently only
-    supported with ``--format=json`` and ``--format=sexp``). By default,
-    unless ``--part=N`` is used to select a specific part or
-    ``--include-html`` is used to include all "text/html" parts, no
-    part with content type "text/html" is included in the output.
+    Include "text/html" parts as part of the output (currently
+    only supported with ``--format=text``, ``--format=json`` and
+    ``--format=sexp``). By default, unless ``--part=N`` is used to
+    select a specific part or ``--include-html`` is used to include all
+    "text/html" parts, no part with content type "text/html" is included
+    in the output.
 
 A common use of **notmuch show** is to display a single thread of email
 messages. For this, use a search term of "thread:<thread-id>" as can be

@@ -232,7 +232,7 @@ format_part_sprinter (const void *ctx, struct sprinter *sp, mime_node_t *node,
 
 void
 format_headers_sprinter (struct sprinter *sp, GMimeMessage *message,
-			 bool reply);
+			 bool reply, const _notmuch_message_crypto_t *msg_crypto);
 
 typedef enum {
     NOTMUCH_SHOW_TEXT_PART_REPLY = 1 << 0,
@@ -275,15 +275,6 @@ notmuch_config_get_database_path (notmuch_config_t *config);
 void
 notmuch_config_set_database_path (notmuch_config_t *config,
 				  const char *database_path);
-
-#if (GMIME_MAJOR_VERSION < 3)
-const char *
-notmuch_config_get_crypto_gpg_path (notmuch_config_t *config);
-
-void
-notmuch_config_set_crypto_gpg_path (notmuch_config_t *config,
-				  const char *gpg_path);
-#endif
 
 const char *
 notmuch_config_get_user_name (notmuch_config_t *config);
@@ -448,6 +439,9 @@ mime_node_child (mime_node_t *parent, int child);
 mime_node_t *
 mime_node_seek_dfs (mime_node_t *node, int n);
 
+const _notmuch_message_crypto_t*
+mime_node_get_message_crypto_status (mime_node_t *node);
+
 typedef enum dump_formats {
     DUMP_FORMAT_AUTO,
     DUMP_FORMAT_BATCH_TAG,
@@ -515,6 +509,6 @@ struct _notmuch_client_indexing_cli_choices {
 extern struct _notmuch_client_indexing_cli_choices indexing_cli_choices;
 extern const notmuch_opt_desc_t  notmuch_shared_indexing_options [];
 notmuch_status_t
-notmuch_process_shared_indexing_options (notmuch_database_t *notmuch, notmuch_config_t *config);
+notmuch_process_shared_indexing_options (notmuch_database_t *notmuch);
 
 #endif

@@ -190,6 +190,21 @@ Non-text part: application/pgp-signature
 EOF
 test_expect_equal_file EXPECTED OUTPUT
 
+test_begin_subtest "--format=text --part=0 --body=false, message header"
+notmuch show --format=text --part=0  --body=false 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
+cat <<EOF >EXPECTED
+message{ id:87liy5ap00.fsf@yoom.home.cworth.org depth:0 match:1 excluded:0 filename:${MAIL_DIR}/multipart
+header{
+Carl Worth <cworth@cworth.org> (2001-01-05) (attachment inbox signed unread)
+Subject: Multipart message
+From: Carl Worth <cworth@cworth.org>
+To: cworth@cworth.org
+Date: Fri, 05 Jan 2001 15:43:57 +0000
+header}
+message}
+EOF
+test_expect_equal_file EXPECTED OUTPUT
+
 test_begin_subtest "--format=text --part=1, message body"
 notmuch show --format=text --part=1 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
 cat <<EOF >EXPECTED
@@ -310,6 +325,15 @@ Non-text part: text/html
 EOF
 test_expect_equal_file EXPECTED OUTPUT
 
+test_begin_subtest "--format=text --include-html --part=5, rfc822's html part"
+notmuch show --format=text --include-html --part=5 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
+cat <<EOF >EXPECTED
+part{ ID: 5, Content-type: text/html
+<p>This is an embedded message, with a multipart/alternative part.</p>
+part}
+EOF
+test_expect_equal_file EXPECTED OUTPUT
+
 test_begin_subtest "--format=text --part=6, rfc822's text part"
 notmuch show --format=text --part=6 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
 cat <<EOF >EXPECTED
@@ -354,7 +378,7 @@ test_expect_success "notmuch show --format=text --part=8 'id:87liy5ap00.fsf@yoom
 test_begin_subtest "--format=json --part=0, full message"
 notmuch show --format=json --part=0 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
 cat <<EOF >EXPECTED
-{"id": "87liy5ap00.fsf@yoom.home.cworth.org", "match": true, "excluded": false, "filename": ["${MAIL_DIR}/multipart"], "timestamp": 978709437, "date_relative": "2001-01-05", "tags": ["attachment","inbox","signed","unread"], "headers": {"Subject": "Multipart message", "From": "Carl Worth <cworth@cworth.org>", "To": "cworth@cworth.org", "Date": "Fri, 05 Jan 2001 15:43:57 +0000"}, "body": [
+{"id": "87liy5ap00.fsf@yoom.home.cworth.org", "crypto": {}, "match": true, "excluded": false, "filename": ["${MAIL_DIR}/multipart"], "timestamp": 978709437, "date_relative": "2001-01-05", "tags": ["attachment","inbox","signed","unread"], "headers": {"Subject": "Multipart message", "From": "Carl Worth <cworth@cworth.org>", "To": "cworth@cworth.org", "Date": "Fri, 05 Jan 2001 15:43:57 +0000"}, "body": [
 {"id": 1, "content-type": "multipart/signed", "content": [
 {"id": 2, "content-type": "multipart/mixed", "content": [
 {"id": 3, "content-type": "message/rfc822", "content-disposition": "inline", "content": [{"headers": {"Subject": "html message", "From": "Carl Worth <cworth@cworth.org>", "To": "cworth@cworth.org", "Date": "Fri, 05 Jan 2001 15:42:57 +0000"}, "body": [
@@ -465,7 +489,6 @@ notmuch show --format=raw --part=0 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUT
 test_expect_equal_file "${MAIL_DIR}"/multipart OUTPUT
 
 test_begin_subtest "--format=raw --part=1, message body"
-test_subtest_broken_gmime_2
 notmuch show --format=raw --part=1 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
 test_expect_equal_file multipart_body OUTPUT
 
@@ -519,7 +542,6 @@ notmuch show --format=raw --part=3 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUT
 test_expect_equal_file embedded_message OUTPUT
 
 test_begin_subtest "--format=raw --part=4, rfc822's multipart"
-test_subtest_broken_gmime_2
 notmuch show --format=raw --part=4 'id:87liy5ap00.fsf@yoom.home.cworth.org' >OUTPUT
 test_expect_equal_file embedded_message_body OUTPUT
 
@@ -615,6 +637,7 @@ notmuch_json_show_sanitize <<EOF >EXPECTED
  "In-reply-to": "<87liy5ap00.fsf@yoom.home.cworth.org>",
  "References": "<87liy5ap00.fsf@yoom.home.cworth.org>"},
  "original": {"id": "XXXXX",
+ "crypto": {},
  "match": false,
  "excluded": false,
  "filename": ["YYYYY"],
@@ -706,6 +729,7 @@ cat_expected_head ()
 {
         cat <<EOF
 [[[{"id": "htmlmessage", "match":true, "excluded": false, "date_relative":"2000-01-01",
+   "crypto": {},
    "timestamp": 946684800,
    "filename": ["${MAIL_DIR}/include-html"],
    "tags": ["inbox", "unread"],

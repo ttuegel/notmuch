@@ -889,10 +889,12 @@ notmuch_query_add_tag_exclude (notmuch_query_t *query, const char *tag);
  *     notmuch_query_t *query;
  *     notmuch_threads_t *threads;
  *     notmuch_thread_t *thread;
+ *     notmuch_status_t stat;
  *
  *     query = notmuch_query_create (database, query_string);
  *
- *     for (threads = notmuch_query_search_threads (query);
+ *     for (stat = notmuch_query_search_threads (query, &threads);
+ *	    stat == NOTMUCH_STATUS_SUCCESS &&
  *          notmuch_threads_valid (threads);
  *          notmuch_threads_move_to_next (threads))
  *     {
@@ -1400,6 +1402,8 @@ notmuch_message_get_thread_id (notmuch_message_t *message);
  * If there are no replies to 'message', this function will return
  * NULL. (Note that notmuch_messages_valid will accept that NULL
  * value as legitimate, and simply return FALSE for it.)
+ *
+ * The returned list will be destroyed when the thread is destroyed.
  */
 notmuch_messages_t *
 notmuch_message_get_replies (notmuch_message_t *message);

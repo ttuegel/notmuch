@@ -4,10 +4,13 @@ dist: xenial
 
 addons:
   apt:
+    sources:
+    - sourceline: 'ppa:xapian-backports/ppa'
+    - sourceline: 'ppa:notmuch/notmuch'
     packages:
     - dtach
     - libxapian-dev
-    - libgmime-2.6-dev
+    - libgmime-3.0-dev
     - libtalloc-dev
     - python3-sphinx
     - gpgsm

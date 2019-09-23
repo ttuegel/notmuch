@@ -24,6 +24,8 @@
 #include <netdb.h>
 #include <assert.h>
 
+#include "unicode-util.h"
+
 static const char toplevel_config_comment[] =
     " .notmuch-config - Configuration file for the notmuch mail system\n"
     "\n"
@@ -104,19 +106,11 @@ static const char search_config_comment[] =
 static const char crypto_config_comment[] =
     " Cryptography related configuration\n"
     "\n"
-#if (GMIME_MAJOR_VERSION < 3)
-    " The following *deprecated* option is currently supported:\n"
-    "\n"
-    "\tgpg_path\n"
-    "\t\tbinary name or full path to invoke gpg.\n"
-    "\t\tNOTE: In a future build, this option will be ignored.\n"
-#else
     " The following old option is now ignored:\n"
     "\n"
     "\tgpgpath\n"
     "\t\tThis option was used by older builds of notmuch to choose\n"
     "\t\tthe version of gpg to use.\n"
-#endif
     "\t\tSetting $PATH is a better approach.\n";
 
 struct _notmuch_config {
@@ -470,12 +464,6 @@ notmuch_config_open (void *ctx,
 	g_error_free (error);
     }
 
-#if (GMIME_MAJOR_VERSION < 3)
-    if (notmuch_config_get_crypto_gpg_path (config) == NULL) {
-	notmuch_config_set_crypto_gpg_path (config, "gpg");
-    }
-#endif
-
     /* Whenever we know of configuration sections that don't appear in
      * the configuration file, we add some comments to help the user
      * understand what can be done. */
@@ -776,21 +764,6 @@ notmuch_config_set_search_exclude_tags (notmuch_config_t *config,
 		      &(config->search_exclude_tags));
 }
 
-#if (GMIME_MAJOR_VERSION < 3)
-const char *
-notmuch_config_get_crypto_gpg_path (notmuch_config_t *config)
-{
-    return _config_get (config, &config->crypto_gpg_path, "crypto", "gpg_path");
-}
-
-void
-notmuch_config_set_crypto_gpg_path (notmuch_config_t *config,
-			      const char *gpg_path)
-{
-    _config_set (config, &config->crypto_gpg_path, "crypto", "gpg_path", gpg_path);
-}
-#endif
-
 
 /* Given a configuration item of the form <group>.<key> return the
  * component group and key. If any error occurs, print a message on
@@ -819,20 +792,80 @@ _item_split (char *item, char **group, char **key)
     return 0;
 }
 
+/* These are more properly called Xapian fields, but the user facing
+   docs call them prefixes, so make the error message match */
+static bool
+validate_field_name (const char *str)
+{
+    const char *key;
+
+    if (! g_utf8_validate (str, -1, NULL)) {
+	fprintf (stderr, "Invalid utf8: %s\n", str);
+	return false;
+    }
+
+    key = g_utf8_strrchr (str, -1, '.');
+    if (! key ) {
+	INTERNAL_ERROR ("Impossible code path on input: %s\n", str);
+    }
+
+    key++;
+
+    if (! *key) {
+	fprintf (stderr, "Empty prefix name: %s\n", str);
+	return false;
+    }
+
+    if (! unicode_word_utf8 (key)) {
+	fprintf (stderr, "Non-word character in prefix name: %s\n", key);
+	return false;
+    }
+
+    if (key[0] >= 'a' && key[0] <= 'z') {
+	fprintf (stderr, "Prefix names starting with lower case letters are reserved: %s\n", key);
+	return false;
+    }
+
+    return true;
+}
+
 #define BUILT_WITH_PREFIX "built_with."
+
+typedef struct config_key {
+    const char *name;
+    bool in_db;
+    bool prefix;
+    bool (*validate)(const char *);
+} config_key_info_t;
+
+static struct config_key
+config_key_table[] = {
+    {"index.decrypt",	true,	false,	NULL},
+    {"index.header.",	true,	true,	validate_field_name},
+    {"query.",		true,	true,	NULL},
+};
+
+static config_key_info_t *
+_config_key_info (const char *item)
+{
+    for (size_t i = 0; i < ARRAY_SIZE (config_key_table); i++) {
+	if (config_key_table[i].prefix &&
+	    strncmp (item, config_key_table[i].name,
+		     strlen(config_key_table[i].name)) == 0)
+	    return config_key_table+i;
+	if (strcmp (item, config_key_table[i].name) == 0)
+	    return config_key_table+i;
+    }
+    return NULL;
+}
 
 static bool
 _stored_in_db (const char *item)
 {
-    const char * db_configs[] = {
-	"index.decrypt",
-    };
-    if (STRNCMP_LITERAL (item, "query.") == 0)
-	return true;
-    for (size_t i = 0; i < ARRAY_SIZE (db_configs); i++)
-	if (strcmp (item, db_configs[i]) == 0)
-	    return true;
-    return false;
+    config_key_info_t *info;
+    info = _config_key_info (item);
+
+    return (info && info->in_db);
 }
 
 static int
@@ -947,13 +980,18 @@ static int
 notmuch_config_command_set (notmuch_config_t *config, char *item, int argc, char *argv[])
 {
     char *group, *key;
+    config_key_info_t *key_info;
 
     if (STRNCMP_LITERAL (item, BUILT_WITH_PREFIX) == 0) {
 	fprintf (stderr, "Error: read only option: %s\n", item);
 	return 1;
     }
 
-    if (_stored_in_db (item)) {
+    key_info = _config_key_info (item);
+    if (key_info && key_info->validate && (! key_info->validate (item)))
+	return 1;
+
+    if (key_info && key_info->in_db) {
 	return _set_db_config (config, item, argc, argv);
     }
 

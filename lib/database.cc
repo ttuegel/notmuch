@@ -63,14 +63,19 @@ typedef struct {
  * We currently have three different types of documents (mail, ghost,
  * and directory) and also some metadata.
  *
+ * There are two kinds of prefixes used in notmuch. There are the
+ * human friendly 'prefix names' like "thread:", which are also used
+ * in the query parser, and the actual prefix terms in the database
+ * (e.g. "G"). The correspondence is maintained in the file scope data
+ * structure 'prefix_table'.
+ *
  * Mail document
  * -------------
  * A mail document is associated with a particular email message. It
- * is stored in one or more files on disk (though only one has its
- * content indexed) and is uniquely identified  by its "id" field
- * (which is generally the message ID). It is indexed with the
- * following prefixed terms which the database uses to construct
- * threads, etc.:
+ * is stored in one or more files on disk and is uniquely identified
+ * by its "id" field (which is generally the message ID). It is
+ * indexed with the following prefixed terms which the database uses
+ * to construct threads, etc.:
  *
  *    Single terms of given prefix:
  *
@@ -117,11 +122,16 @@ typedef struct {
  *	LAST_MOD:	The revision number as of the last tag or
  *			filename change.
  *
- * In addition, terms from the content of the message are added with
- * "from", "to", "attachment", and "subject" prefixes for use by the
- * user in searching. Similarly, terms from the path of the mail
- * message are added with "folder" and "path" prefixes. But the
- * database doesn't really care itself about any of these.
+ * The prefixed terms described above are also searchable without an
+ * explicit field name, but as of notmuch 0.29 this is due to
+ * query-parser setup, not extra terms in the database.  In addition,
+ * terms from the content of the message are added without a prefix
+ * for use by the user in searching. Note that the prefix name "body"
+ * is used to refer to the empty prefix string in the database.
+ *
+ * The path of the containing folder is added with the "folder" prefix
+ * (see _notmuch_message_add_folder_terms).  Sub-paths of the the path
+ * of the mail message are added with the "path" prefix.
  *
  * The data portion of a mail document is empty.
  *
@@ -259,6 +269,8 @@ prefix_t prefix_table[] = {
     { "directory",		"XDIRECTORY",	NOTMUCH_FIELD_NO_FLAGS },
     { "file-direntry",		"XFDIRENTRY",	NOTMUCH_FIELD_NO_FLAGS },
     { "directory-direntry",	"XDDIRENTRY",	NOTMUCH_FIELD_NO_FLAGS },
+    { "body",			"",		NOTMUCH_FIELD_EXTERNAL |
+						NOTMUCH_FIELD_PROBABILISTIC},
     { "thread",			"G",		NOTMUCH_FIELD_EXTERNAL |
 						NOTMUCH_FIELD_PROCESSOR },
     { "tag",			"K",		NOTMUCH_FIELD_EXTERNAL |
@@ -302,10 +314,70 @@ prefix_t prefix_table[] = {
 static void
 _setup_query_field_default (const prefix_t *prefix, notmuch_database_t *notmuch)
 {
+    if (prefix->prefix)
+	notmuch->query_parser->add_prefix ("",prefix->prefix);
     if (prefix->flags & NOTMUCH_FIELD_PROBABILISTIC)
 	notmuch->query_parser->add_prefix (prefix->name, prefix->prefix);
     else
 	notmuch->query_parser->add_boolean_prefix (prefix->name, prefix->prefix);
+}
+
+notmuch_string_map_iterator_t *
+_notmuch_database_user_headers (notmuch_database_t *notmuch)
+{
+    return _notmuch_string_map_iterator_create (notmuch->user_header, "", false);
+}
+
+const char *
+_user_prefix (void *ctx, const char* name)
+{
+    return talloc_asprintf(ctx, "XU%s:", name);
+}
+
+static notmuch_status_t
+_setup_user_query_fields (notmuch_database_t *notmuch)
+{
+    notmuch_config_list_t *list;
+    notmuch_status_t status;
+
+    notmuch->user_prefix = _notmuch_string_map_create (notmuch);
+    if (notmuch->user_prefix == NULL)
+	return NOTMUCH_STATUS_OUT_OF_MEMORY;
+
+    notmuch->user_header = _notmuch_string_map_create (notmuch);
+    if (notmuch->user_header == NULL)
+	return NOTMUCH_STATUS_OUT_OF_MEMORY;
+
+    status = notmuch_database_get_config_list (notmuch, CONFIG_HEADER_PREFIX, &list);
+    if (status)
+	return status;
+
+    for (; notmuch_config_list_valid (list); notmuch_config_list_move_to_next (list)) {
+
+	prefix_t query_field;
+
+	const char *key = notmuch_config_list_key (list)
+	    + sizeof (CONFIG_HEADER_PREFIX) - 1;
+
+	_notmuch_string_map_append (notmuch->user_prefix,
+				    key,
+				    _user_prefix (notmuch, key));
+
+	_notmuch_string_map_append (notmuch->user_header,
+				    key,
+				    notmuch_config_list_value (list));
+
+	query_field.name = talloc_strdup (notmuch, key);
+	query_field.prefix = _user_prefix (notmuch, key);
+	query_field.flags = NOTMUCH_FIELD_PROBABILISTIC
+	    | NOTMUCH_FIELD_EXTERNAL;
+
+	_setup_query_field_default (&query_field, notmuch);
+    }
+
+    notmuch_config_list_destroy (list);
+
+    return NOTMUCH_STATUS_SUCCESS;
 }
 
 #if HAVE_XAPIAN_FIELD_PROCESSOR
@@ -326,6 +398,8 @@ _setup_query_field (const prefix_t *prefix, notmuch_database_t *notmuch)
 					    *notmuch->query_parser, notmuch))->release ();
 
 	/* we treat all field-processor fields as boolean in order to get the raw input */
+	if (prefix->prefix)
+	    notmuch->query_parser->add_prefix ("",prefix->prefix);
 	notmuch->query_parser->add_boolean_prefix (prefix->name, fp);
     } else {
 	_setup_query_field_default (prefix, notmuch);
@@ -352,6 +426,26 @@ _find_prefix (const char *name)
     INTERNAL_ERROR ("No prefix exists for '%s'\n", name);
 
     return "";
+}
+
+/* Like find prefix, but include the possibility of user defined
+ * prefixes specific to this database */
+
+const char *
+_notmuch_database_prefix (notmuch_database_t *notmuch, const char *name)
+{
+    unsigned int i;
+
+    /*XXX TODO: reduce code duplication */
+    for (i = 0; i < ARRAY_SIZE (prefix_table); i++) {
+	if (strcmp (name, prefix_table[i].name) == 0)
+	    return prefix_table[i].prefix;
+    }
+
+    if (notmuch->user_prefix)
+	return _notmuch_string_map_get (notmuch->user_prefix, name);
+
+    return NULL;
 }
 
 static const struct {
@@ -383,6 +477,10 @@ static const struct {
       "indexed MIME types", "w"},
     { NOTMUCH_FEATURE_LAST_MOD,
       "modification tracking", "w"},
+    /* Existing databases will work fine for all queries not involving
+     * 'body:' */
+    { NOTMUCH_FEATURE_UNPREFIX_BODY_ONLY,
+      "index body and headers separately", "w"},
 };
 
 const char *
@@ -656,6 +754,7 @@ notmuch_database_create_verbose (const char *path,
      * new databases have them. */
     notmuch->features |= NOTMUCH_FEATURE_FROM_SUBJECT_ID_VALUES;
     notmuch->features |= NOTMUCH_FEATURE_INDEXED_MIMETYPES;
+    notmuch->features |= NOTMUCH_FEATURE_UNPREFIX_BODY_ONLY;
 
     status = notmuch_database_upgrade (notmuch, NULL, NULL);
     if (status) {
@@ -859,7 +958,7 @@ notmuch_database_open_verbose (const char *path,
 
     /* Initialize gmime */
     if (! initialized) {
-	g_mime_init (GMIME_ENABLE_RFC2047_WORKAROUNDS);
+	g_mime_init ();
 	initialized = 1;
     }
 
@@ -965,6 +1064,7 @@ notmuch_database_open_verbose (const char *path,
 		_setup_query_field (prefix, notmuch);
 	    }
 	}
+	status = _setup_user_query_fields (notmuch);
     } catch (const Xapian::Error &error) {
 	IGNORE_RESULT (asprintf (&message, "A Xapian exception occurred opening database: %s\n",
 				 error.get_msg().c_str()));

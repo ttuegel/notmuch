@@ -71,6 +71,7 @@ reindex_query (notmuch_database_t *notmuch, const char *query_string,
 	ret = notmuch_message_reindex(message, indexopts);
 	if (ret != NOTMUCH_STATUS_SUCCESS)
 	    break;
+	notmuch_message_destroy (message);
     }
 
     if (!ret)
@@ -116,7 +117,7 @@ notmuch_reindex_command (notmuch_config_t *config, int argc, char *argv[])
 
     notmuch_exit_if_unmatched_db_uuid (notmuch);
 
-    status = notmuch_process_shared_indexing_options (notmuch, config);
+    status = notmuch_process_shared_indexing_options (notmuch);
     if (status != NOTMUCH_STATUS_SUCCESS) {
 	fprintf (stderr, "Error: Failed to process index options. (%s)\n",
 		 notmuch_status_to_string (status));

@@ -10,8 +10,6 @@ test_description='PGP/MIME signature verification and decryption'
 ##################################################
 
 add_gnupg_home
-# Change this if we ship a new test key
-FINGERPRINT="5AEAB11F5E33DCE875DDB75B6D92612D94E46381"
 
 test_begin_subtest "emacs delivery of signed message"
 test_expect_success \
@@ -27,7 +25,7 @@ test_expect_equal "$output" "thread:XXX   2000-01-01 [1/1] Notmuch Test Suite; t
 test_begin_subtest "signature verification"
 output=$(notmuch show --format=json --verify subject:"test signed message 001" \
     | notmuch_json_show_sanitize \
-    | sed -e 's|"created": [1234567890]*|"created": 946728000|')
+    | sed -e 's|"created": [1234567890]*|"created": 946728000|g')
 expected='[[[{"id": "XXXXX",
  "match": true,
  "excluded": false,
@@ -35,6 +33,7 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["inbox","signed"],
+ "crypto": {"signed": {"status": [{ "status": "good", "created": 946728000, "fingerprint": "'$FINGERPRINT'", "userid": "'"$SELF_USERID"'"}]}},
  "headers": {"Subject": "test signed message 001",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",
@@ -42,7 +41,8 @@ expected='[[[{"id": "XXXXX",
  "body": [{"id": 1,
  "sigstatus": [{"status": "good",
  "fingerprint": "'$FINGERPRINT'",
- "created": 946728000}],
+ "created": 946728000,
+ "userid": "'"$SELF_USERID"'"}],
  "content-type": "multipart/signed",
  "content": [{"id": 2,
  "content-type": "text/plain",
@@ -75,6 +75,7 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["inbox","signed"],
+ "crypto": {"signed": {"status": [{ "status": "bad", "keyid": "'$(echo $FINGERPRINT | cut -c 25-)'"}]}},
  "headers": {"Subject": "bad signed message 001",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",
@@ -113,6 +114,7 @@ output=$(notmuch show --format=json --verify subject:"bad signed message 002" \
     | notmuch_json_show_sanitize \
     | sed -e 's|"created": [1234567890]*|"created": 946728000|')
 expected='[[[{"id": "XXXXX",
+ "crypto": {},
  "match": true,
  "excluded": false,
  "filename": ["YYYYY"],
@@ -137,14 +139,14 @@ test_expect_equal_json \
     "$output" \
     "$expected"
 
-test_begin_subtest "signature verification with full owner trust"
-test_subtest_broken_gmime_2
-# give the key full owner trust
-echo "${FINGERPRINT}:6:" | gpg --no-tty --import-ownertrust >>"$GNUPGHOME"/trust.log 2>&1
-gpg --no-tty --check-trustdb >>"$GNUPGHOME"/trust.log 2>&1
+test_begin_subtest "signature verification without full user ID validity"
+# give the key no owner trust, removes validity on all user IDs of the
+# certificate in the absence of other trusted certifiers:
+gpg --quiet --batch --no-tty --export-ownertrust > "$GNUPGHOME/ownertrust.bak"
+echo "${FINGERPRINT}:3:" | gpg --quiet --batch --no-tty --import-ownertrust
 output=$(notmuch show --format=json --verify subject:"test signed message 001" \
     | notmuch_json_show_sanitize \
-    | sed -e 's|"created": [1234567890]*|"created": 946728000|')
+    | sed -e 's|"created": [1234567890]*|"created": 946728000|g')
 expected='[[[{"id": "XXXXX",
  "match": true,
  "excluded": false,
@@ -152,6 +154,7 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["inbox","signed"],
+ "crypto": {"signed": {"status": [{ "status": "good", "created": 946728000, "fingerprint": "'$FINGERPRINT'"}]}},
  "headers": {"Subject": "test signed message 001",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",
@@ -159,8 +162,7 @@ expected='[[[{"id": "XXXXX",
  "body": [{"id": 1,
  "sigstatus": [{"status": "good",
  "fingerprint": "'$FINGERPRINT'",
- "created": 946728000,
- "userid": "Notmuch Test Suite <test_suite@notmuchmail.org> (INSECURE!)"}],
+ "created": 946728000}],
  "content-type": "multipart/signed",
  "content": [{"id": 2,
  "content-type": "text/plain",
@@ -172,13 +174,14 @@ expected='[[[{"id": "XXXXX",
 test_expect_equal_json \
     "$output" \
     "$expected"
+gpg --quiet --batch --no-tty --import-ownertrust < "$GNUPGHOME/ownertrust.bak"
 
 test_begin_subtest "signature verification with signer key unavailable"
 # move the gnupghome temporarily out of the way
 mv "${GNUPGHOME}"{,.bak}
 output=$(notmuch show --format=json --verify subject:"test signed message 001" \
     | notmuch_json_show_sanitize \
-    | sed -e 's|"created": [1234567890]*|"created": 946728000|')
+    | sed -e 's|"created": [1234567890]*|"created": 946728000|g')
 expected='[[[{"id": "XXXXX",
  "match": true,
  "excluded": false,
@@ -186,6 +189,7 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["inbox","signed"],
+ "crypto": {"signed": {"status": [{"errors": {"key-missing": true}, "keyid": "'$(echo $FINGERPRINT | cut -c 25-)'", "status": "error"}]}},
  "headers": {"Subject": "test signed message 001",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",
@@ -265,13 +269,13 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["encrypted","inbox"],
+ "crypto": {"decrypted": {"status": "full"}},
  "headers": {"Subject": "test encrypted message 001",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",
  "Date": "Sat, 01 Jan 2000 12:00:00 +0000"},
  "body": [{"id": 1,
  "encstatus": [{"status": "good"}],
- "sigstatus": [],
  "content-type": "multipart/encrypted",
  "content": [{"id": 2,
  "content-type": "application/pgp-encrypted",
@@ -317,6 +321,7 @@ output=$(notmuch show --format=json --decrypt=true subject:"test encrypted messa
     | notmuch_json_show_sanitize \
     | sed -e 's|"created": [1234567890]*|"created": 946728000|')
 expected='[[[{"id": "XXXXX",
+ "crypto": {},
  "match": true,
  "excluded": false,
  "filename": ["YYYYY"],
@@ -350,10 +355,9 @@ test_expect_success \
     "(mml-secure-message-sign-encrypt)"'
 
 test_begin_subtest "decryption + signature verification"
-test_subtest_broken_gmime_2
 output=$(notmuch show --format=json --decrypt=true subject:"test encrypted message 002" \
     | notmuch_json_show_sanitize \
-    | sed -e 's|"created": [1234567890]*|"created": 946728000|')
+    | sed -e 's|"created": [1234567890]*|"created": 946728000|g')
 expected='[[[{"id": "XXXXX",
  "match": true,
  "excluded": false,
@@ -361,6 +365,9 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["encrypted","inbox"],
+ "crypto": {"signed": {"status": [{ "status": "good", "created": 946728000, "fingerprint": "'$FINGERPRINT'", "userid": "'"$SELF_USERID"'"}],
+                       "encrypted": true },
+            "decrypted": {"status": "full"}},
  "headers": {"Subject": "test encrypted message 002",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",
@@ -370,7 +377,7 @@ expected='[[[{"id": "XXXXX",
  "sigstatus": [{"status": "good",
  "fingerprint": "'$FINGERPRINT'",
  "created": 946728000,
- "userid": "Notmuch Test Suite <test_suite@notmuchmail.org> (INSECURE!)"}],
+ "userid": "'"$SELF_USERID"'"}],
  "content-type": "multipart/encrypted",
  "content": [{"id": 2,
  "content-type": "application/pgp-encrypted",
@@ -388,6 +395,7 @@ output=$(notmuch reply --decrypt=true subject:"test encrypted message 002" \
     | notmuch_drop_mail_headers In-Reply-To References)
 expected='From: Notmuch Test Suite <test_suite@notmuchmail.org>
 Subject: Re: test encrypted message 002
+To: test_suite@notmuchmail.org
 
 On 01 Jan 2000 12:00:00 -0000, Notmuch Test Suite <test_suite@notmuchmail.org> wrote:
 > This is another test encrypted message.'
@@ -401,10 +409,10 @@ test_emacs "(let ((message-hidden-headers '())
   (notmuch-show \"subject:test.encrypted.message.002\")
   (notmuch-show-reply)
   (test-output))"
-# the empty To: is probably a bug, but it's not to do with encryption
-grep -v -e '^In-Reply-To:' -e '^References:' -e '^Fcc:' -e 'To:' < OUTPUT > OUTPUT.clean
+grep -v -e '^In-Reply-To:' -e '^References:' -e '^Fcc:' < OUTPUT > OUTPUT.clean
 cat <<EOF >EXPECTED
 From: Notmuch Test Suite <test_suite@notmuchmail.org>
+To: test_suite@notmuchmail.org
 Subject: Re: test encrypted message 002
 --text follows this line--
 <#secure method=pgpmime mode=signencrypt>
@@ -435,6 +443,7 @@ expected='[[[{"id": "XXXXX",
  "timestamp": 946728000,
  "date_relative": "2000-01-01",
  "tags": ["inbox","signed"],
+ "crypto": {"signed": {"status": [{"errors": {"key-revoked": true}, "keyid": "'$(echo $FINGERPRINT | cut -c 25-)'", "status": "error"}]}},
  "headers": {"Subject": "test signed message 001",
  "From": "Notmuch Test Suite <test_suite@notmuchmail.org>",
  "To": "test_suite@notmuchmail.org",

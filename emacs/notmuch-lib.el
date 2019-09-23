@@ -155,6 +155,7 @@ For example, if you wanted to remove an \"inbox\" tag and add an
     (define-key map "s" 'notmuch-search)
     (define-key map "z" 'notmuch-tree)
     (define-key map "m" 'notmuch-mua-new-mail)
+    (define-key map "g" 'notmuch-refresh-this-buffer)
     (define-key map "=" 'notmuch-refresh-this-buffer)
     (define-key map (kbd "M-=") 'notmuch-refresh-all-buffers)
     (define-key map "G" 'notmuch-poll-and-refresh-this-buffer)
@@ -297,7 +298,7 @@ This is basically just `format-kbd-macro' but we also convert ESC to M-."
   "Prepend cons cells describing prefix-arg ACTUAL-KEY and ACTUAL-KEY to TAIL
 
 It does not prepend if ACTUAL-KEY is already listed in TAIL."
-  (let ((key-string (concat prefix (format-kbd-macro actual-key))))
+  (let ((key-string (concat prefix (key-description actual-key))))
     ;; We don't include documentation if the key-binding is
     ;; over-ridden. Note, over-riding a binding automatically hides the
     ;; prefixed version too.
@@ -312,7 +313,7 @@ It does not prepend if ACTUAL-KEY is already listed in TAIL."
       ;; Documentation for command
       (push (cons key-string
 		  (or (and (symbolp binding) (get binding 'notmuch-doc))
-		      (notmuch-documentation-first-line binding)))
+		      (and (functionp binding) (notmuch-documentation-first-line binding))))
 	    tail)))
     tail)
 
@@ -1006,6 +1007,20 @@ status."
 ;; declared globally first to avoid compiler warnings.
 (defvar notmuch-show-process-crypto nil)
 (make-variable-buffer-local 'notmuch-show-process-crypto)
+
+(defun notmuch-interactive-region ()
+  "Return the bounds of the current interactive region.
+
+This returns (BEG END), where BEG and END are the bounds of the
+region if the region is active, or both `point' otherwise."
+  (if (region-active-p)
+      (list (region-beginning) (region-end))
+    (list (point) (point))))
+
+(define-obsolete-function-alias
+    'notmuch-search-interactive-region
+    'notmuch-interactive-region
+  "notmuch 0.29")
 
 (provide 'notmuch-lib)
 

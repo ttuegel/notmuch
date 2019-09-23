@@ -28,7 +28,7 @@ static void
 show_reply_headers (GMimeStream *stream, GMimeMessage *message)
 {
     /* Output RFC 2822 formatted (and RFC 2047 encoded) headers. */
-    if (g_mime_object_write_to_stream (GMIME_OBJECT(message), stream) < 0) {
+    if (g_mime_object_write_to_stream (GMIME_OBJECT(message), NULL, stream) < 0) {
 	INTERNAL_ERROR("failed to write headers to stdout\n");
     }
 }
@@ -75,10 +75,10 @@ format_part_reply (GMimeStream *stream, mime_node_t *node)
 			       GMIME_DISPOSITION_ATTACHMENT) == 0) {
 	    const char *filename = g_mime_part_get_filename (GMIME_PART (node->part));
 	    g_mime_stream_printf (stream, "Attachment: %s (%s)\n", filename,
-				  g_mime_content_type_to_string (content_type));
+				  g_mime_content_type_get_mime_type (content_type));
 	} else {
 	    g_mime_stream_printf (stream, "Non-text part: %s\n",
-				  g_mime_content_type_to_string (content_type));
+				  g_mime_content_type_get_mime_type (content_type));
 	}
     }
 
@@ -176,7 +176,7 @@ static unsigned int
 scan_address_list (InternetAddressList *list,
 		   notmuch_config_t *config,
 		   GMimeMessage *message,
-		   GMimeRecipientType type,
+		   GMimeAddressType type,
 		   const char **user_from)
 {
     InternetAddress *address;
@@ -209,7 +209,7 @@ scan_address_list (InternetAddressList *list,
 		if (user_from && *user_from == NULL)
 		    *user_from = addr;
 	    } else if (message) {
-		g_mime_message_add_recipient (message, type, name, addr);
+		g_mime_message_add_mailbox (message, type, name, addr);
 		n++;
 	    }
 	}
@@ -285,8 +285,6 @@ static InternetAddressList *get_sender(GMimeMessage *message)
 	 */
 	if (! reply_to_header_is_redundant (message, reply_to_list))
 	    return reply_to_list;
-
-	g_mime_2_6_unref (G_OBJECT (reply_to_list));
     }
 
     return g_mime_message_get_from (message);
@@ -325,15 +323,9 @@ add_recipients_from_message (GMimeMessage *reply,
 			     GMimeMessage *message,
 			     bool reply_all)
 {
-
-    /* There is a memory leak here with gmime-2.6 because get_sender
-     * returns a newly allocated list, while the others return
-     * references to libgmime owned data. This leak will be fixed with
-     * the transition to gmime-3.0.
-     */
     struct {
 	InternetAddressList * (*get_header)(GMimeMessage *message);
-	GMimeRecipientType recipient_type;
+	GMimeAddressType recipient_type;
     } reply_to_map[] = {
 	{ get_sender,	GMIME_ADDRESS_TYPE_TO },
 	{ get_to,	GMIME_ADDRESS_TYPE_TO },
@@ -368,6 +360,14 @@ add_recipients_from_message (GMimeMessage *reply,
 		break;
 	}
     }
+
+    /* If no recipients were added but we found one of the user's
+     * addresses to use as a from address then the message is from the
+     * user to the user - add the discovered from address to the list
+     * of recipients so that the reply goes back to the user.
+     */
+    if (n == 0 && from_addr)
+	g_mime_message_add_mailbox (reply, GMIME_ADDRESS_TYPE_TO, NULL, from_addr);
 
     return from_addr;
 }
@@ -541,7 +541,7 @@ create_reply_message(void *ctx,
     in_reply_to = talloc_asprintf (ctx, "<%s>",
 				   notmuch_message_get_message_id (message));
 
-    g_mime_object_set_header (GMIME_OBJECT (reply), "In-Reply-To", in_reply_to);
+    g_mime_object_set_header (GMIME_OBJECT (reply), "In-Reply-To", in_reply_to, NULL);
 
     orig_references = notmuch_message_get_header (message, "references");
     if (orig_references && *orig_references)
@@ -550,7 +550,7 @@ create_reply_message(void *ctx,
     else
 	references = talloc_strdup (ctx, in_reply_to);
 
-    g_mime_object_set_header (GMIME_OBJECT (reply), "References", references);
+    g_mime_object_set_header (GMIME_OBJECT (reply), "References", references, NULL);
 
     from_addr = add_recipients_from_message (reply, config,
 					     mime_message, reply_all);
@@ -589,13 +589,13 @@ create_reply_message(void *ctx,
     from_addr = talloc_asprintf (ctx, "%s <%s>",
 				 notmuch_config_get_user_name (config),
 				 from_addr);
-    g_mime_object_set_header (GMIME_OBJECT (reply), "From", from_addr);
+    g_mime_object_set_header (GMIME_OBJECT (reply), "From", from_addr, NULL);
 
-    subject = notmuch_message_get_header (message, "subject");
+    subject = g_mime_message_get_subject (mime_message);
     if (subject) {
 	if (strncasecmp (subject, "Re:", 3))
 	    subject = talloc_asprintf (ctx, "Re: %s", subject);
-	g_mime_message_set_subject (reply, subject);
+	g_mime_message_set_subject (reply, subject, NULL);
     }
 
     return reply;
@@ -663,7 +663,9 @@ static int do_reply(notmuch_config_t *config,
 
 	    /* The headers of the reply message we've created */
 	    sp->map_key (sp, "reply-headers");
-	    format_headers_sprinter (sp, reply, true);
+	    /* FIXME: send msg_crypto here to avoid killing the
+	     * subject line on reply to encrypted messages! */
+	    format_headers_sprinter (sp, reply, true, NULL);
 
 	    /* Start the original */
 	    sp->map_key (sp, "original");
@@ -745,10 +747,6 @@ notmuch_reply_command (notmuch_config_t *config, int argc, char *argv[])
 	fprintf (stderr, "Error: notmuch reply requires at least one search term.\n");
 	return EXIT_FAILURE;
     }
-
-#if (GMIME_MAJOR_VERSION < 3)
-    params.crypto.gpgpath = notmuch_config_get_crypto_gpg_path (config);
-#endif
 
     if (notmuch_database_open (notmuch_config_get_database_path (config),
 			       NOTMUCH_DATABASE_MODE_READ_ONLY, &notmuch))

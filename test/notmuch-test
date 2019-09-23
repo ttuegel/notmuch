@@ -32,33 +32,63 @@ rm -rf $NOTMUCH_BUILDDIR/test/test-results
 
 # Test for timeout utility
 if command -v timeout >/dev/null; then
-    TEST_TIMEOUT_CMD="timeout 2m"
-    echo "INFO: using 2 minute timeout for tests"
+    TEST_TIMEOUT=${NOTMUCH_TEST_TIMEOUT:-2m}
+    if [ "$TEST_TIMEOUT" = 0 ]; then
+        TEST_TIMEOUT_CMD=""
+        echo "INFO: timeout disabled"
+    else
+        TEST_TIMEOUT_CMD="timeout $TEST_TIMEOUT"
+        echo "INFO: using $TEST_TIMEOUT timeout for tests"
+    fi
 else
     TEST_TIMEOUT_CMD=""
 fi
 
 trap 'e=$?; kill $!; exit $e' HUP INT TERM
+
+META_FAILURE=
 # Run the tests
-for test in $TESTS; do
-    $TEST_TIMEOUT_CMD $test "$@" &
-    wait $!
-    # If the test failed without producing results, then it aborted,
-    # so we should abort, too.
-    RES=$?
-    testname=$(basename $test .sh)
-    if [[ $RES != 0 && ! -e "$NOTMUCH_BUILDDIR/test/test-results/$testname" ]]; then
-        exit $RES
+if test -z "$NOTMUCH_TEST_SERIALIZE" && command -v parallel >/dev/null ; then
+    test -t 1 && export COLORS_WITHOUT_TTY=t || :
+    if parallel -h | grep -q GNU ; then
+        echo "INFO: running tests with GNU parallel"
+        printf '%s\n' $TESTS | $TEST_TIMEOUT_CMD parallel
+    else
+        echo "INFO: running tests with moreutils parallel"
+        $TEST_TIMEOUT_CMD parallel -- $TESTS
     fi
-done
+    RES=$?
+    if [[ $RES != 0 ]]; then
+        META_FAILURE="parallel test suite returned error code $RES"
+    fi
+else
+    for test in $TESTS; do
+        $TEST_TIMEOUT_CMD $test "$@" &
+        wait $!
+        # If the test failed without producing results, then it aborted,
+        # so we should abort, too.
+        RES=$?
+        testname=$(basename $test .sh)
+        if [[ $RES != 0 && ! -e "$NOTMUCH_BUILDDIR/test/test-results/$testname" ]]; then
+            META_FAILURE="Aborting on $testname (returned $RES)"
+            break
+        fi
+    done
+fi
 trap - HUP INT TERM
 
 # Report results
 echo
 $NOTMUCH_SRCDIR/test/aggregate-results.sh $NOTMUCH_BUILDDIR/test/test-results/*
 ev=$?
+if [ -n "$META_FAILURE" ]; then
+    printf 'ERROR: %s\n' "$META_FAILURE"
+    if [ $ev = 0 ]; then
+        ev=$RES
+    fi
+fi
 
 # Clean up
-rm -rf $NOTMUCH_BUILDDIR/test/test-results $NOTMUCH_BUILDDIR/test/corpora.mail
+rm -rf $NOTMUCH_BUILDDIR/test/test-results
 
 exit $ev

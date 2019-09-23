@@ -21,16 +21,20 @@
  *          Austin Clements <aclements@csail.mit.edu>
  */
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "notmuch-client.h"
 
 /* Context that gets inherited from the root node. */
 typedef struct mime_node_context {
     /* Per-message resources.  These are allocated internally and must
      * be destroyed. */
-    FILE *file;
     GMimeStream *stream;
     GMimeParser *parser;
     GMimeMessage *mime_message;
+    _notmuch_message_crypto_t *msg_crypto;
 
     /* Context provided by the caller. */
     _notmuch_crypto_t *crypto;
@@ -48,10 +52,13 @@ _mime_node_context_free (mime_node_context_t *res)
     if (res->stream)
 	g_object_unref (res->stream);
 
-    if (res->file)
-	fclose (res->file);
-
     return 0;
+}
+
+const _notmuch_message_crypto_t*
+mime_node_get_message_crypto_status (mime_node_t *node)
+{
+    return node->ctx->msg_crypto;
 }
 
 notmuch_status_t
@@ -62,6 +69,7 @@ mime_node_open (const void *ctx, notmuch_message_t *message,
     mime_node_context_t *mctx;
     mime_node_t *root;
     notmuch_status_t status;
+    int fd;
 
     root = talloc_zero (ctx, mime_node_t);
     if (root == NULL) {
@@ -80,8 +88,8 @@ mime_node_open (const void *ctx, notmuch_message_t *message,
     talloc_set_destructor (mctx, _mime_node_context_free);
 
     /* Fast path */
-    mctx->file = fopen (filename, "r");
-    if (! mctx->file) {
+    fd = open (filename, O_RDONLY);
+    if (fd == -1) {
 	/* Slow path - for some reason the first file in the list is
 	 * not available anymore. This is clearly a problem in the
 	 * database, but we are not going to let this problem be a
@@ -92,13 +100,13 @@ mime_node_open (const void *ctx, notmuch_message_t *message,
 	     notmuch_filenames_move_to_next (filenames))
 	{
 	    filename = notmuch_filenames_get (filenames);
-	    mctx->file = fopen (filename, "r");
-	    if (mctx->file)
+	    fd = open (filename, O_RDONLY);
+	    if (fd != -1)
 		break;
 	}
 
 	talloc_free (filenames);
-	if (! mctx->file) {
+	if (fd == -1) {
 	    /* Give up */
 	    fprintf (stderr, "Error opening %s: %s\n", filename, strerror (errno));
 		status = NOTMUCH_STATUS_FILE_ERROR;
@@ -106,13 +114,12 @@ mime_node_open (const void *ctx, notmuch_message_t *message,
 	    }
 	}
 
-    mctx->stream = g_mime_stream_file_new (mctx->file);
+    mctx->stream = g_mime_stream_gzfile_new (fd);
     if (!mctx->stream) {
 	fprintf (stderr, "Out of memory.\n");
 	status = NOTMUCH_STATUS_OUT_OF_MEMORY;
 	goto DONE;
     }
-    g_mime_stream_file_set_owner (GMIME_STREAM_FILE (mctx->stream), false);
 
     mctx->parser = g_mime_parser_new_with_stream (mctx->stream);
     if (!mctx->parser) {
@@ -121,12 +128,14 @@ mime_node_open (const void *ctx, notmuch_message_t *message,
 	goto DONE;
     }
 
-    mctx->mime_message = g_mime_parser_construct_message (mctx->parser);
+    mctx->mime_message = g_mime_parser_construct_message (mctx->parser, NULL);
     if (!mctx->mime_message) {
 	fprintf (stderr, "Failed to parse %s\n", filename);
 	status = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
+
+    mctx->msg_crypto = _notmuch_message_crypto_new (mctx);
 
     mctx->crypto = crypto;
 
@@ -149,7 +158,7 @@ DONE:
     return status;
 }
 
-/* Signature list destructor (GMime 2.6) */
+/* Signature list destructor */
 static int
 _signature_list_free (GMimeSignatureList **proxy)
 {
@@ -157,7 +166,7 @@ _signature_list_free (GMimeSignatureList **proxy)
     return 0;
 }
 
-/* Set up signature list destructor (GMime 2.6) */
+/* Set up signature list destructor */
 static void
 set_signature_list_destructor (mime_node_t *node)
 {
@@ -168,16 +177,16 @@ set_signature_list_destructor (mime_node_t *node)
     }
 }
 
-/* Verify a signed mime node (GMime 2.6) */
+/* Verify a signed mime node */
 static void
-node_verify (mime_node_t *node, GMimeObject *part,
-	     g_mime_3_unused(GMimeCryptoContext *cryptoctx))
+node_verify (mime_node_t *node, GMimeObject *part)
 {
     GError *err = NULL;
+    notmuch_status_t status;
 
     node->verify_attempted = true;
     node->sig_list = g_mime_multipart_signed_verify
-	(GMIME_MULTIPART_SIGNED (part), cryptoctx, &err);
+	(GMIME_MULTIPART_SIGNED (part), GMIME_ENCRYPT_NONE, &err);
 
     if (node->sig_list)
 	set_signature_list_destructor (node);
@@ -187,15 +196,19 @@ node_verify (mime_node_t *node, GMimeObject *part,
 
     if (err)
 	g_error_free (err);
+
+    status = _notmuch_message_crypto_potential_sig_list (node->ctx->msg_crypto, node->sig_list);
+    if (status) /* this is a warning, not an error */
+	fprintf (stderr, "Warning: failed to note signature status: %s.\n", notmuch_status_to_string (status));
 }
 
-/* Decrypt and optionally verify an encrypted mime node (GMime 2.6) */
+/* Decrypt and optionally verify an encrypted mime node */
 static void
-node_decrypt_and_verify (mime_node_t *node, GMimeObject *part,
-			 g_mime_3_unused(GMimeCryptoContext *cryptoctx))
+node_decrypt_and_verify (mime_node_t *node, GMimeObject *part)
 {
     GError *err = NULL;
     GMimeDecryptResult *decrypt_result = NULL;
+    notmuch_status_t status;
     GMimeMultipartEncrypted *encrypteddata = GMIME_MULTIPART_ENCRYPTED (part);
     notmuch_message_t *message = NULL;
 
@@ -209,7 +222,7 @@ node_decrypt_and_verify (mime_node_t *node, GMimeObject *part,
 	node->decrypted_child = _notmuch_crypto_decrypt (&node->decrypt_attempted,
 							 node->ctx->crypto->decrypt,
 							 message,
-							 cryptoctx, encrypteddata, &decrypt_result, &err);
+							 encrypteddata, &decrypt_result, &err);
     }
     if (! node->decrypted_child) {
 	fprintf (stderr, "Failed to decrypt part: %s\n",
@@ -218,17 +231,22 @@ node_decrypt_and_verify (mime_node_t *node, GMimeObject *part,
     }
 
     node->decrypt_success = true;
-    node->verify_attempted = true;
+    status = _notmuch_message_crypto_successful_decryption (node->ctx->msg_crypto);
+    if (status) /* this is a warning, not an error */
+	fprintf (stderr, "Warning: failed to note decryption status: %s.\n", notmuch_status_to_string (status));
 
     if (decrypt_result) {
 	/* This may be NULL if the part is not signed. */
 	node->sig_list = g_mime_decrypt_result_get_signatures (decrypt_result);
 	if (node->sig_list) {
+	    node->verify_attempted = true;
 	    g_object_ref (node->sig_list);
 	    set_signature_list_destructor (node);
+	    status = _notmuch_message_crypto_potential_sig_list (node->ctx->msg_crypto, node->sig_list);
+	    if (status) /* this is a warning, not an error */
+		fprintf (stderr, "Warning: failed to note signature status: %s.\n", notmuch_status_to_string (status));
 	}
 
-#if HAVE_GMIME_SESSION_KEYS
 	if (node->ctx->crypto->decrypt == NOTMUCH_DECRYPT_TRUE && message) {
 	    notmuch_database_t *db = notmuch_message_get_database (message);
 	    const char *session_key = g_mime_decrypt_result_get_session_key (decrypt_result);
@@ -238,7 +256,6 @@ node_decrypt_and_verify (mime_node_t *node, GMimeObject *part,
 				      notmuch_message_add_property (message, "session-key",
 								    session_key));
 	}
-#endif
 	g_object_unref (decrypt_result);
     }
 
@@ -248,10 +265,10 @@ node_decrypt_and_verify (mime_node_t *node, GMimeObject *part,
 }
 
 static mime_node_t *
-_mime_node_create (mime_node_t *parent, GMimeObject *part)
+_mime_node_create (mime_node_t *parent, GMimeObject *part, int numchild)
 {
     mime_node_t *node = talloc_zero (parent, mime_node_t);
-    GMimeCryptoContext *cryptoctx = NULL;
+    notmuch_status_t status;
 
     /* Set basic node properties */
     node->part = part;
@@ -284,22 +301,6 @@ _mime_node_create (mime_node_t *parent, GMimeObject *part)
 	return NULL;
     }
 
-#if (GMIME_MAJOR_VERSION < 3)
-    if ((GMIME_IS_MULTIPART_ENCRYPTED (part) && (node->ctx->crypto->decrypt != NOTMUCH_DECRYPT_FALSE))
-	|| (GMIME_IS_MULTIPART_SIGNED (part) && node->ctx->crypto->verify)) {
-	GMimeContentType *content_type = g_mime_object_get_content_type (part);
-	const char *protocol = g_mime_content_type_get_parameter (content_type, "protocol");
-	notmuch_status_t status;
-	status = _notmuch_crypto_get_gmime_ctx_for_protocol (node->ctx->crypto,
-							     protocol, &cryptoctx);
-	if (status) /* this is a warning, not an error */
-	    fprintf (stderr, "Warning: %s (%s).\n", notmuch_status_to_string (status),
-		     protocol ? protocol : "NULL");
-	if (!cryptoctx)
-	    return node;
-    }
-#endif
-
     /* Handle PGP/MIME parts */
     if (GMIME_IS_MULTIPART_ENCRYPTED (part) && (node->ctx->crypto->decrypt != NOTMUCH_DECRYPT_FALSE)) {
 	if (node->nchildren != 2) {
@@ -308,7 +309,7 @@ _mime_node_create (mime_node_t *parent, GMimeObject *part)
 		     "message (must be exactly 2)\n",
 		     node->nchildren);
 	} else {
-	    node_decrypt_and_verify (node, part, cryptoctx);
+	    node_decrypt_and_verify (node, part);
 	}
     } else if (GMIME_IS_MULTIPART_SIGNED (part) && node->ctx->crypto->verify) {
 	if (node->nchildren != 2) {
@@ -317,8 +318,12 @@ _mime_node_create (mime_node_t *parent, GMimeObject *part)
 		     "(must be exactly 2)\n",
 		     node->nchildren);
 	} else {
-	    node_verify (node, part, cryptoctx);
+	    node_verify (node, part);
 	}
+    } else {
+	status = _notmuch_message_crypto_potential_payload (node->ctx->msg_crypto, part, parent ? parent->part : NULL, numchild);
+	if (status)
+	    fprintf (stderr, "Warning: failed to record potential crypto payload (%s).\n", notmuch_status_to_string (status));
     }
 
     return node;
@@ -334,7 +339,7 @@ mime_node_child (mime_node_t *parent, int child)
 	return NULL;
 
     if (GMIME_IS_MULTIPART (parent->part)) {
-	if (child == 1 && parent->decrypted_child)
+	if (child == GMIME_MULTIPART_ENCRYPTED_CONTENT && parent->decrypted_child)
 	    sub = parent->decrypted_child;
 	else
 	    sub = g_mime_multipart_get_part
@@ -346,7 +351,7 @@ mime_node_child (mime_node_t *parent, int child)
 	INTERNAL_ERROR ("Unexpected GMimeObject type: %s",
 			g_type_name (G_OBJECT_TYPE (parent->part)));
     }
-    node = _mime_node_create (parent, sub);
+    node = _mime_node_create (parent, sub, child);
 
     if (child == parent->next_child && parent->next_part_num != -1) {
 	/* We're traversing in depth-first order.  Record the child's

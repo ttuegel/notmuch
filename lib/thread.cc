@@ -30,8 +30,6 @@
 #define THREAD_DEBUG(format, ...) do {} while (0) /* ignored */
 #endif
 
-#define EMPTY_STRING(s) ((s)[0] == '\0')
-
 struct _notmuch_thread {
     notmuch_database_t *notmuch;
     char *thread_id;
@@ -284,7 +282,7 @@ _thread_add_message (notmuch_thread_t *thread,
 
     from = notmuch_message_get_header (message, "from");
     if (from)
-	list = internet_address_list_parse_string (from);
+	list = internet_address_list_parse (NULL, from);
 
     if (list) {
 	address = internet_address_list_get_address (list, 0);

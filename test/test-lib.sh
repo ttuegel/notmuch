@@ -55,6 +55,9 @@ done,*)
 	;;
 esac
 
+# STDIN from /dev/null. EOF for readers (and ENOTTY for tty related ioctls).
+exec </dev/null
+
 # Save STDOUT to fd 6 and STDERR to fd 7.
 exec 6>&1 7>&2
 # Make xtrace debugging (when used) use redirected STDERR, with verbose lead:
@@ -117,6 +120,11 @@ add_gnupg_home ()
 	echo debug-quick-random >> "$GNUPGHOME"/gpg.conf
     fi
     echo no-emit-version >> "$GNUPGHOME"/gpg.conf
+
+    # Change this if we ship a new test key
+    FINGERPRINT="5AEAB11F5E33DCE875DDB75B6D92612D94E46381"
+    SELF_USERID="Notmuch Test Suite <test_suite@notmuchmail.org> (INSECURE!)"
+    printf '%s:6:\n' "$FINGERPRINT" | gpg --quiet --batch --no-tty --import-ownertrust
 }
 
 # Each test should start with something like this, after copyright notices:
@@ -126,15 +134,7 @@ add_gnupg_home ()
 # '
 # . ./test-lib.sh || exit 1
 
-[ "x$ORIGINAL_TERM" != "xdumb" ] && (
-		TERM=$ORIGINAL_TERM &&
-		export TERM &&
-		[ -t 1 ] &&
-		tput bold >/dev/null 2>&1 &&
-		tput setaf 1 >/dev/null 2>&1 &&
-		tput sgr0 >/dev/null 2>&1
-	) &&
-	color=t
+color=maybe
 
 while test "$#" -ne 0
 do
@@ -173,6 +173,21 @@ else
     print_subtest () {
 	true
     }
+fi
+
+test -n "$COLORS_WITHOUT_TTY" || [ -t 1 ] || color=
+
+if [ -n "$color" ] && [ "$ORIGINAL_TERM" != 'dumb' ] && (
+		TERM=$ORIGINAL_TERM &&
+		export TERM &&
+		tput bold
+		tput setaf
+		tput sgr0
+	) >/dev/null 2>&1
+then
+	color=t
+else
+	color=
 fi
 
 if test -n "$color"; then
@@ -312,16 +327,17 @@ emacs_deliver_message ()
     shift 2
     # before we can send a message, we have to prepare the FCC maildir
     mkdir -p "$MAIL_DIR"/sent/{cur,new,tmp}
-    # eval'ing smtp-dummy --background will set smtp_dummy_pid
-    smtp_dummy_pid=
+    # eval'ing smtp-dummy --background will set smtp_dummy_pid and -_port
+    local smtp_dummy_pid= smtp_dummy_port=
     eval `$TEST_DIRECTORY/smtp-dummy --background sent_message`
     test -n "$smtp_dummy_pid" || return 1
+    test -n "$smtp_dummy_port" || return 1
 
     test_emacs \
 	"(let ((message-send-mail-function 'message-smtpmail-send-it)
-               (mail-host-address \"example.com\")
+	       (mail-host-address \"example.com\")
 	       (smtpmail-smtp-server \"localhost\")
-	       (smtpmail-smtp-service \"25025\"))
+	       (smtpmail-smtp-service \"${smtp_dummy_port}\"))
 	   (notmuch-mua-mail)
 	   (message-goto-to)
 	   (insert \"test_suite@notmuchmail.org\nDate: 01 Jan 2000 12:00:00 -0000\")
@@ -329,7 +345,7 @@ emacs_deliver_message ()
 	   (insert \"${subject}\")
 	   (message-goto-body)
 	   (insert \"${body}\")
-	   $@
+	   $*
 	   (notmuch-mua-send-and-exit))"
 
     # In case message was sent properly, client waits for confirmation
@@ -373,7 +389,7 @@ emacs_fcc_message ()
 	   (insert \"${subject}\")
 	   (message-goto-body)
 	   (insert \"${body}\")
-	   $@
+	   $*
 	   (notmuch-mua-send-and-exit))" || return 1
     notmuch new $nmn_args >/dev/null
 }
@@ -391,14 +407,8 @@ add_email_corpus ()
     corpus=${1:-default}
 
     rm -rf ${MAIL_DIR}
-    if [ -d $TEST_DIRECTORY/corpora.mail/$corpus ]; then
-	cp -a $TEST_DIRECTORY/corpora.mail/$corpus ${MAIL_DIR}
-    else
-	cp -a $NOTMUCH_SRCDIR/test/corpora/$corpus ${MAIL_DIR}
-	notmuch new >/dev/null || die "'notmuch new' failed while adding email corpus"
-	mkdir -p $TEST_DIRECTORY/corpora.mail
-	cp -a ${MAIL_DIR} $TEST_DIRECTORY/corpora.mail/$corpus
-    fi
+    cp -a $NOTMUCH_SRCDIR/test/corpora/$corpus ${MAIL_DIR}
+    notmuch new >/dev/null || die "'notmuch new' failed while adding email corpus"
 }
 
 test_begin_subtest ()
@@ -495,6 +505,30 @@ test_expect_equal_json () {
 test_sort_json () {
     PYTHONIOENCODING=utf-8 $NOTMUCH_PYTHON -c \
         "import sys, json; json.dump(sorted(json.load(sys.stdin)),sys.stdout)"
+}
+
+# test for json objects:
+# read the source of test/json_check_nodes.py (or the output when
+# invoking it without arguments) for an explanation of the syntax.
+test_json_nodes () {
+        exec 1>&6 2>&7		# Restore stdout and stderr
+	if [ -z "$inside_subtest" ]; then
+		error "bug in the test script: test_json_eval without test_begin_subtest"
+	fi
+	inside_subtest=
+	test "$#" > 0 ||
+	    error "bug in the test script: test_json_nodes needs at least 1 parameter"
+
+	if ! test_skip "$test_subtest_name"
+	then
+	    output=$(PYTHONIOENCODING=utf-8 $NOTMUCH_PYTHON "$TEST_DIRECTORY"/json_check_nodes.py "$@")
+		if [ "$?" = 0 ]
+		then
+			test_ok_
+		else
+			test_failure_ "$output"
+		fi
+	fi
 }
 
 test_emacs_expect_t () {
@@ -997,7 +1031,7 @@ test_emacs () {
 	rm -f OUTPUT
 	touch OUTPUT
 
-	${TEST_EMACSCLIENT} --socket-name="$EMACS_SERVER" --eval "(notmuch-test-progn $@)"
+	${TEST_EMACSCLIENT} --socket-name="$EMACS_SERVER" --eval "(notmuch-test-progn $*)"
 }
 
 test_python() {
@@ -1075,22 +1109,6 @@ test_init_ () {
 TEST_DIRECTORY=$NOTMUCH_BUILDDIR/test
 
 . "$NOTMUCH_SRCDIR/test/test-lib-common.sh" || exit 1
-
-if [ "${NOTMUCH_GMIME_MAJOR}" = 3 ]; then
-    test_subtest_broken_gmime_3 () {
-	test_subtest_known_broken
-    }
-    test_subtest_broken_gmime_2 () {
-	true
-    }
-else
-    test_subtest_broken_gmime_3 () {
-	true
-    }
-    test_subtest_broken_gmime_2 () {
-	test_subtest_known_broken
-    }
-fi
 
 emacs_generate_script
 

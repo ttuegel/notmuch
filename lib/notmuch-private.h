@@ -136,6 +136,7 @@ typedef enum _notmuch_private_status {
     /* Then add our own private values. */
     NOTMUCH_PRIVATE_STATUS_TERM_TOO_LONG = NOTMUCH_STATUS_LAST_STATUS,
     NOTMUCH_PRIVATE_STATUS_NO_DOCUMENT_FOUND,
+    NOTMUCH_PRIVATE_STATUS_BAD_PREFIX,
 
     NOTMUCH_PRIVATE_STATUS_LAST_STATUS
 } notmuch_private_status_t;
@@ -180,6 +181,11 @@ typedef struct _notmuch_doc_id_set notmuch_doc_id_set_t;
  * _notmuch_message_add/remove_term functions. */
 const char *
 _find_prefix (const char *name);
+
+/* Lookup a prefix value by name, including possibly user defined prefixes
+ */
+const char *
+_notmuch_database_prefix (notmuch_database_t  *notmuch, const char *name);
 
 char *
 _notmuch_message_id_compressed (void *ctx, const char *message_id);
@@ -318,6 +324,10 @@ _notmuch_message_set_header_values (notmuch_message_t *message,
 				    const char *date,
 				    const char *from,
 				    const char *subject);
+
+void
+_notmuch_message_update_subject (notmuch_message_t *message,
+				 const char *subject);
 
 void
 _notmuch_message_upgrade_last_mod (notmuch_message_t *message);
@@ -646,6 +656,11 @@ _notmuch_string_map_iterator_value (notmuch_string_map_iterator_t *iterator);
 void
 _notmuch_string_map_iterator_destroy (notmuch_string_map_iterator_t *iterator);
 
+/* Create an iterator for user headers. Destroy with
+ * _notmuch_string_map_iterator_destroy. Actually in database.cc*/
+notmuch_string_map_iterator_t *
+_notmuch_database_user_headers (notmuch_database_t *notmuch);
+
 /* tags.c */
 
 notmuch_tags_t *
@@ -675,6 +690,10 @@ _notmuch_thread_create (void *ctx,
 struct _notmuch_indexopts {
     _notmuch_crypto_t crypto;
 };
+
+#define CONFIG_HEADER_PREFIX "index.header."
+
+#define EMPTY_STRING(s) ((s)[0] == '\0')
 
 NOTMUCH_END_DECLS
 

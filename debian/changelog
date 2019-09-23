@@ -1,3 +1,37 @@
+notmuch (0.29.1-1) experimental; urgency=medium
+
+  * New upstream bug fix release
+    - fix for building and installing without emacs, does not occur
+      in Debian builds.
+
+ -- David Bremner <bremner@debian.org>  Tue, 11 Jun 2019 20:16:03 -0300
+
+notmuch (0.29-2) experimental; urgency=medium
+
+  * New upstream feature release. See /usr/share/doc/notmuch/NEWS.gz for
+    details.
+  * Bug fix: "notmuch-hello screen should show notmuch logo", thanks to
+    Tim Retout (Closes: #918928).
+  * Bug fix: "Can't deal with compressed maildir files", thanks to
+    Joerg Jaspert (Closes: #688609).
+  * Bug fix: "Please ship notmuch-emacs-mua.desktop", thanks to Tim Retout
+    (Closes: #918975).
+
+ -- David Bremner <bremner@debian.org>  Thu, 06 Jun 2019 21:35:12 -0300
+
+notmuch (0.29~rc1-1) experimental; urgency=medium
+
+  * New upstream release candidate, with fix for parallel sphinx-build
+    invocation
+
+ -- David Bremner <bremner@debian.org>  Mon, 03 Jun 2019 08:09:38 -0300
+
+notmuch (0.29~rc0-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+
+ -- David Bremner <bremner@debian.org>  Fri, 31 May 2019 08:22:21 -0300
+
 notmuch (0.28.4-1) unstable; urgency=medium
 
   * New upstream bugfix release

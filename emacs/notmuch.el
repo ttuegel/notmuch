@@ -557,20 +557,11 @@ thread."
 	(setq output (append output (notmuch-search-get-tags pos)))))
     output))
 
-(defun notmuch-search-interactive-region ()
-  "Return the bounds of the current interactive region.
-
-This returns (BEG END), where BEG and END are the bounds of the
-region if the region is active, or both `point' otherwise."
-  (if (region-active-p)
-      (list (region-beginning) (region-end))
-    (list (point) (point))))
-
 (defun notmuch-search-interactive-tag-changes (&optional initial-input)
   "Prompt for tag changes for the current thread or region.
 
 Returns (TAG-CHANGES REGION-BEGIN REGION-END)."
-  (let* ((region (notmuch-search-interactive-region))
+  (let* ((region (notmuch-interactive-region))
 	 (beg (first region)) (end (second region))
 	 (prompt (if (= beg end) "Tag thread" "Tag region")))
     (cons (notmuch-read-tag-changes
@@ -590,8 +581,8 @@ is inactive this applies to the thread at point.
 If ONLY-MATCHED is non-nil, only tag matched messages."
   (interactive (notmuch-search-interactive-tag-changes))
   (unless (and beg end)
-    (setq beg (car (notmuch-search-interactive-region))
-	  end (cadr (notmuch-search-interactive-region))))
+    (setq beg (car (notmuch-interactive-region))
+	  end (cadr (notmuch-interactive-region))))
   (let ((search-string (notmuch-search-find-stable-query-region
 			beg end only-matched)))
     (notmuch-tag search-string tag-changes)
@@ -627,7 +618,7 @@ messages will be \"unarchived\" (i.e. the tag changes in
 `notmuch-archive-tags' will be reversed).
 
 This function advances the next thread when finished."
-  (interactive (cons current-prefix-arg (notmuch-search-interactive-region)))
+  (interactive (cons current-prefix-arg (notmuch-interactive-region)))
   (when notmuch-archive-tags
     (notmuch-search-tag
      (notmuch-tag-change-list notmuch-archive-tags unarchive) beg end))
@@ -711,7 +702,7 @@ A thread with TAG will have FACE applied.
 Here is an example of how to color search results based on tags.
  (the following text would be placed in your ~/.emacs file):
 
- (setq notmuch-search-line-faces '((\"unread\" . (:foreground \"green\"))
+ (setq notmuch-search-line-faces \\='((\"unread\" . (:foreground \"green\"))
                                    (\"deleted\" . (:foreground \"red\"
 						  :background \"blue\"))))
 
@@ -1076,7 +1067,7 @@ current search results AND the additional query string provided."
 Runs a new search matching only messages that match both the
 current search results AND that are tagged with the given tag."
   (interactive
-   (list (notmuch-select-tag-with-completion "Filter by tag: ")))
+   (list (notmuch-select-tag-with-completion "Filter by tag: " notmuch-search-query-string)))
   (notmuch-search (concat notmuch-search-query-string " and tag:" tag) notmuch-search-oldest-first))
 
 ;;;###autoload
